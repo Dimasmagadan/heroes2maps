@@ -1,0 +1,10 @@
+{
+  "name": "her2",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Random map generator for Heroes of Might and Magic II (fheroes2 .fh2m format)",
+  "scripts": {
+    "test": "node --test test/"
+  }
+}
