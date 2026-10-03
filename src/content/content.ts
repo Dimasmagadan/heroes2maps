@@ -31,7 +31,7 @@ import {
   variantFor,
   type ResourceName,
 } from './catalog.ts';
-import { chooseGuard, guardStrength } from './monsters.ts';
+import { DIFFICULTY_FACTOR, chooseGuard, guardStrength } from './monsters.ts';
 
 export type ContentKind = 'castle' | 'hero' | 'mine' | 'resource' | 'treasure' | 'artifact' | 'dwelling' | 'powerup' | 'guard' | 'boat' | 'misc';
 
@@ -388,6 +388,9 @@ export function scatterResources(ctx: ContentContext, zone: Zone, anchor: number
 
 // --- Gates ---
 
+// Strength of the monster at the gate of a walled-in team (fheroes2 army strength at normal difficulty).
+const KEEPER_STRENGTH = 6000;
+
 // A monster on each connection's gate: stronger between neutral zones deeper in the map.
 export function guardGates(ctx: ContentContext): void {
   const g = ctx.grid;
@@ -395,10 +398,11 @@ export function guardGates(ctx: ContentContext): void {
     const za = ctx.layout.zones[c.a] as Zone;
     const zb = ctx.layout.zones[c.b] as Zone;
     // Guard on the side of the zone farther from the starts.
-    const [zone, gate] = za.distance >= zb.distance ? [za, c.gateA] : [zb, c.gateB];
+    const [zone, gate] = c.keeper !== undefined ? (c.keeper === za.id ? [za, c.gateA] : [zb, c.gateB]) : za.distance >= zb.distance ? [za, c.gateA] : [zb, c.gateB];
     const value = 3500 + 5000 * Math.max(za.distance, zb.distance);
     const strength = guardStrength(value, zone.distance, ctx.opts.difficulty) * (za.kind === 'start' || zb.kind === 'start' ? 0.8 : 1.2);
-    const choice = chooseGuard(ctx.rng, strength);
+    // The single way into the walled-in team: one huge stack, on the walled side of the gate.
+    const choice = c.keeper !== undefined ? chooseGuard(ctx.rng, KEEPER_STRENGTH * DIFFICULTY_FACTOR[ctx.opts.difficulty], 10) : chooseGuard(ctx.rng, strength);
     // Use the gate tile or the nearest free tile on the corridor.
     const spots = [gate, ...g.around(gate, 2).sort((p, q) => g.euclid(p, gate) - g.euclid(q, gate) || p - q)];
     for (const s of spots) {

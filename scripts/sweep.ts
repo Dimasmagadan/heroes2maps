@@ -34,17 +34,19 @@ function jobs(seeds: number): Job[] {
     for (let players = min; players <= max; ++players) {
       for (let seed = 1; seed <= seeds; ++seed) {
         const k = seed + players;
+        const preset = PRESETS[(k >> 1) % PRESETS.length] as GeneratorOptions['preset'];
         list.push({
           options: {
             seed: seed * 1000 + size + players,
             size,
             players,
             water: WATER_LEVELS[k % WATER_LEVELS.length] as GeneratorOptions['water'],
-            preset: PRESETS[(k >> 1) % PRESETS.length] as GeneratorOptions['preset'],
+            preset,
             difficulty: DIFFICULTIES[(k >> 2) % DIFFICULTIES.length] as GeneratorOptions['difficulty'],
             victory: VICTORY_CONDITIONS[seed % VICTORY_CONDITIONS.length] as GeneratorOptions['victory'],
             race: RACES[(seed + size) % RACES.length] as GeneratorOptions['race'],
             expansion: seed % 5 === 0,
+            teams: players >= 4 && preset !== 'islands' && seed % 3 === 0,
           },
         });
       }

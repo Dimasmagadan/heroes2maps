@@ -122,8 +122,10 @@ export function generateLandscape(layout: Layout, opts: GeneratorOptions, rng: R
     }
     const z = zones[zoneOf[t] as number] as Zone;
     let g = z.ground;
-    const p = patchNoise.fbm(grid.x(t) / 6, grid.y(t) / 6, 3);
-    if (p > 0.66 && grid.distance(t, z.seed) > 6) g = secondary[z.id] as Ground;
+    // Necromancer maps: larger and more frequent patches, so the secondary ground forms real regions.
+    const necro = opts.race === 'necromancer';
+    const p = patchNoise.fbm(grid.x(t) / (necro ? 10 : 6), grid.y(t) / (necro ? 10 : 6), 3);
+    if (p > (necro ? 0.58 : 0.66) && grid.distance(t, z.seed) > 6) g = secondary[z.id] as Ground;
     ground[t] = g;
   }
   // Beaches.

@@ -12,7 +12,7 @@ import { artifacts, objectTypes } from './data/enums.ts';
 import { ObjectGroup, type MapFormat } from './fh2m/types.ts';
 import type { Layout, Zone } from './layout/zones.ts';
 import { generateLayout } from './layout/zones.ts';
-import { resolveOptions, type GeneratorOptions } from './options.ts';
+import { playerTeams, resolveOptions, type GeneratorOptions } from './options.ts';
 import { Rng } from './rng.ts';
 import { Ground, GROUND_NAMES } from './terrain/ground.ts';
 import { generateLandscape, type Landscape } from './terrain/landscape.ts';
@@ -30,9 +30,9 @@ import {
   scatterResources,
   type CastleSite,
 } from './content/content.ts';
-import { NEUTRAL_COLOR_INDEX, RACE_NAMES, artifactObjectIndex, firstIndexOfType, type ResourceName } from './content/catalog.ts';
+import { NEUTRAL_COLOR_INDEX, RACE_NAMES, artifactObjectIndex, firstIndexOfType, monsterObjectIndex, type ResourceName } from './content/catalog.ts';
 import { blockedFraction, decorateIslandsAndSea, decorateZones, placeRivers, wallZoneBorders } from './content/decorate.ts';
-import { RIDDLES, RUMORS, SIGN_MESSAGES, mapName } from './content/names.ts';
+import { PEASANT_RUMORS, RIDDLES, RUMORS, SIGN_MESSAGES, mapName } from './content/names.ts';
 import { repairReachability } from './content/repair.ts';
 import { routeRoads } from './content/roads.ts';
 import { validateMap, type ValidationReport } from './validate.ts';
@@ -102,15 +102,20 @@ function generateAttempt(options: GeneratorOptions, attempt: number, debug: Debu
   const kitRng = root.fork('kit');
   const rareCount = options.size <= 36 ? 1 : 2;
   const rares = kitRng.shuffle([...RARE_RESOURCES]).slice(0, rareCount);
+  // Teams: team 1 (the human) starts poor, team 3 (walled in) starts rich, team 2 gets the standard kit.
+  const teams = playerTeams(options);
+  const START_QUALITY: Record<number, number> = { 1: 0.5, 2: 1, 3: 1.7 };
   for (const site of castles) {
     const zone = layout.zones[site.zone] as Zone;
     const entrance = site.tile + 2 * b.grid.width;
+    const team = options.teams ? (teams[site.player] as number) : 2;
     for (const r of ['wood', 'ore'] as const) {
       if (!placeMine(ctx, zone, r, entrance, 4, 10, 1e9)) throw new GenerationError(`No room for the ${r} mine of player ${site.player}`);
     }
-    for (const r of rares) placeMine(ctx, zone, r, entrance, 7, 16, 40);
-    scatterResources(ctx, zone, entrance, ['wood', 'ore', 'wood', 'ore'], 2, 7);
-    fillZone(ctx, zone, ZONE_BUDGET[options.size]! * 0.45 * sizeFactor(ctx, zone), entrance, 80);
+    for (const r of team === 3 ? RARE_RESOURCES : team === 1 ? rares.slice(0, 1) : rares) placeMine(ctx, zone, r, entrance, 7, 16, 40);
+    if (team === 3) placeMine(ctx, zone, 'gold', entrance, 6, 14, 40);
+    scatterResources(ctx, zone, entrance, team === 1 ? ['wood', 'ore'] : ['wood', 'ore', 'wood', 'ore'], 2, 7);
+    fillZone(ctx, zone, ZONE_BUDGET[options.size]! * 0.45 * (START_QUALITY[team] as number) * sizeFactor(ctx, zone), entrance, 80);
   }
 
   // --- Neutral zones ---
@@ -141,6 +146,9 @@ function generateAttempt(options: GeneratorOptions, attempt: number, debug: Debu
     const budget = ZONE_BUDGET[options.size]! * (0.7 + 1.5 * zone.distance) * (zone.kind === 'center' ? 1.4 : 1) * sizeFactor(ctx, zone) * necroFactor;
     fillZone(ctx, zone, budget, anchor);
   }
+
+  // Teams: a field of peasants for the human to find (necromancy fodder against the huge guard of team 3).
+  if (options.teams) placePeasantField(ctx, layout, castles, neutral);
 
   // The capture-town victory needs a neutral town: put one into the farthest zone that has room.
   if (options.victory === 'capture-town' && !ctx.castles.some((c) => c.player < 0)) {
@@ -231,6 +239,46 @@ function placeBoatsWhereNeeded(ctx: ContentContext, layout: Layout, castles: rea
   }
 }
 
+// A crowd of weak, large peasant stacks in a hidden corner of a neutral zone two or more zones from the human's start.
+// Beating them raises plenty of skeletons for a necromancer.
+function placePeasantField(ctx: ContentContext, layout: Layout, castles: readonly CastleSite[], neutral: readonly Zone[]): void {
+  const home = castles.find((c) => c.player === 0)?.zone;
+  if (home === undefined) return;
+  const steps = new Map<number, number>([[home, 0]]);
+  for (let queue = [home]; queue.length > 0; ) {
+    const cur = queue.shift() as number;
+    for (const c of layout.connections) {
+      const next = c.a === cur ? c.b : c.b === cur ? c.a : -1;
+      if (next >= 0 && !steps.has(next)) {
+        steps.set(next, (steps.get(cur) as number) + 1);
+        queue.push(next);
+      }
+    }
+  }
+  const g = ctx.grid;
+  const homeSeed = (layout.zones[home] as Zone).seed;
+  const zones = neutral
+    .filter((z) => (steps.get(z.id) ?? 0) >= 2 && z.tiles.some((t) => ctx.usable(t)))
+    .sort((a, b) => (steps.get(a.id) as number) - (steps.get(b.id) as number) || g.euclid(a.seed, homeSeed) - g.euclid(b.seed, homeSeed) || a.id - b.id);
+  for (const zone of zones) {
+    // The hidden corner: the usable tile deepest inside the zone and farthest from its seed.
+    const spots = zone.tiles.filter((t) => ctx.usable(t) && (ctx.borderDist[t] as number) >= 5);
+    if (spots.length === 0) continue;
+    const anchor = spots.reduce((best, t) => (g.euclid(t, zone.seed) > g.euclid(best, zone.seed) ? t : best));
+    let placedCount = 0;
+    for (let k = 0; k < 40 && placedCount < 12; ++k) {
+      const p = ctx.placeInZone(zone, ObjectGroup.MONSTERS, monsterObjectIndex(1), { anchor, min: 0, max: 7, prefer: 3, margin: 3, tag: 'peasants' });
+      if (!p) continue;
+      const meta = ctx.b.map.monsterMetadata.get(p.uid);
+      if (meta) meta.count = ctx.rng.range(150, 350);
+      ctx.record({ uid: p.uid, zone: zone.id, kind: 'misc', value: 0, tile: p.tile });
+      ++placedCount;
+    }
+    if (placedCount >= 6) return;
+  }
+  throw new GenerationError('No room for the field of peasants');
+}
+
 function placeSpadeOfNecromancy(ctx: ContentContext, neutral: readonly Zone[]): void {
   const spade = artifacts.find((a) => a.name === 'SPADE_NECROMANCY');
   if (!spade) return;
@@ -303,7 +351,10 @@ function finishMetadata(ctx: ContentContext, options: GeneratorOptions, landscap
   const humanRace = options.race === 'random' ? 128 : 1 << RACE_NAMES.indexOf(options.race);
   map.playerRace = [0, 0, 0, 0, 0, 0].map((_, i) => (i >= options.players ? 0 : i === 0 ? humanRace : 128));
   map.difficulty = { easy: 0, normal: 1, hard: 2, expert: 3 }[options.difficulty];
-  map.alliances = [];
+  const teams = playerTeams(options);
+  // Colors of each team as bitmasks; no alliances without the teams option.
+  const teamMask = (t: number) => teams.reduce((mask, team, p) => (team === t ? mask | (1 << p) : mask), 0);
+  map.alliances = options.teams ? [1, 2, 3].map(teamMask) : [];
   map.lossConditionType = 0;
   map.lossConditionMetadata = [];
   map.victoryConditionType = 0;
@@ -336,6 +387,7 @@ function finishMetadata(ctx: ContentContext, options: GeneratorOptions, landscap
   map.creatorNotes = `Generated by her2 (https://github.com/ihhub/fheroes2 format v13). Seed ${options.seed}, options ${JSON.stringify(options)}.`;
 
   map.rumors = rng.shuffle([...RUMORS]).slice(0, 3);
+  if (options.teams) map.rumors.push(rng.pick(PEASANT_RUMORS));
   // A weekly caravan for everyone: a little wood and ore every 7 days from day 7.
   map.dailyEvents = [
     {
@@ -347,5 +399,13 @@ function finishMetadata(ctx: ContentContext, options: GeneratorOptions, landscap
       resources: { wood: 3, mercury: 0, ore: 3, sulfur: 0, crystal: 0, gems: 0, gold: 0 },
     },
   ];
+  // Team 3 starts rich: a treasury on day 1, then gold every week.
+  if (options.teams) {
+    const none = { wood: 0, mercury: 0, ore: 0, sulfur: 0, crystal: 0, gems: 0, gold: 0 };
+    map.dailyEvents.push(
+      { message: 'The treasury of the fortress is full.', humanPlayerColors: 0, computerPlayerColors: teamMask(3), firstOccurrenceDay: 1, repeatPeriodInDays: 0, resources: { wood: 15, mercury: 6, ore: 15, sulfur: 6, crystal: 6, gems: 6, gold: 10000 } },
+      { message: 'Taxes arrive from the fortress lands.', humanPlayerColors: 0, computerPlayerColors: teamMask(3), firstOccurrenceDay: 7, repeatPeriodInDays: 7, resources: { ...none, gold: 2500 } },
+    );
+  }
 }
 

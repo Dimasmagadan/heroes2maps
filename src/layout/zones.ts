@@ -7,7 +7,7 @@
 // penalized so players meet through neutral land) plus some extra edges for loops.
 
 import { Grid, ORTHOGONAL_DIRECTIONS } from '../grid.ts';
-import type { GeneratorOptions } from '../options.ts';
+import { playerTeams, type GeneratorOptions } from '../options.ts';
 import type { Rng } from '../rng.ts';
 import { Ground } from '../terrain/ground.ts';
 import { ValueNoise } from '../terrain/noise.ts';
@@ -31,6 +31,8 @@ export interface Connection {
   b: number;
   gateA: number; // border tile on zone a's side
   gateB: number; // adjacent border tile on zone b's side
+  // The only way into a walled-in team (teams option): guarded by one huge monster.
+  keeper?: number; // id of the walled-in zone
 }
 
 export interface Layout {
@@ -96,7 +98,9 @@ export function generateLayout(opts: GeneratorOptions, rng: Rng): Layout {
   // --- Tile assignment ---
   const noise = new ValueNoise(rng.fork('zone-noise'));
   const amp = W * 0.07;
-  const weight = (kind: ZoneKind) => (kind === 'start' ? 0.93 : kind === 'center' ? 0.97 : 1);
+  const teams = playerTeams(opts);
+  // The walled-in team gets bigger zones.
+  const weight = (s: { kind: ZoneKind; player: number }) => (s.kind === 'start' ? (opts.teams && teams[s.player] === 3 ? 0.85 : 0.93) : s.kind === 'center' ? 0.97 : 1);
   const zoneOf = new Int16Array(grid.size);
   for (let t = 0; t < grid.size; ++t) {
     const x = grid.x(t);
@@ -107,7 +111,7 @@ export function generateLayout(opts: GeneratorOptions, rng: Rng): Layout {
     let bestD = Infinity;
     for (let i = 0; i < seeds.length; ++i) {
       const s = seeds[i] as (typeof seeds)[number];
-      const d = Math.hypot(x + nx - s.x, y + ny - s.y) * weight(s.kind);
+      const d = Math.hypot(x + nx - s.x, y + ny - s.y) * weight(s);
       if (d < bestD) {
         bestD = d;
         best = i;
@@ -155,7 +159,7 @@ export function generateLayout(opts: GeneratorOptions, rng: Rng): Layout {
   for (const z of zones) z.distance = z.kind === 'start' ? 0 : Math.min(1, z.distance / maxD);
 
   assignGrounds(zones, opts, rng.fork('zone-grounds'));
-  const connections = connectZones(grid, zoneOf, zones, rng.fork('connections'));
+  const connections = connectZones(grid, zoneOf, zones, rng.fork('connections'), opts.teams ? teams : null);
   return { grid, zoneOf, zones, connections };
 }
 
@@ -203,7 +207,31 @@ function fixZoneConnectivity(grid: Grid, zoneOf: Int16Array, seeds: readonly num
   }
 }
 
+// Necromancer maps follow the hand-made maps (Apocalypse, Eruption): one blighted ground covers most of the map in
+// big connected regions, a few contrasting realms stand out against it. Adjacent zones may share a ground, so the
+// borders between them are only marked by walls.
+function assignNecromancerGrounds(zones: Zone[], rng: Rng): void {
+  const blight = rng.pick([Ground.DIRT, Ground.LAVA]);
+  const accents = rng.shuffle([Ground.SNOW, Ground.SWAMP, Ground.GRASS, Ground.DESERT]);
+  const startPool = rng.shuffle([...START_GROUNDS]);
+  let k = 0;
+  for (const z of zones) {
+    if (z.kind === 'start') {
+      z.ground = z.player === 0 ? Ground.WASTELAND : (startPool[k++ % startPool.length] as Ground);
+    } else if (z.kind === 'center') {
+      z.ground = blight;
+    } else {
+      const roll = rng.next();
+      z.ground = roll < 0.5 ? blight : roll < 0.75 ? Ground.WASTELAND : (accents[z.id % 2] as Ground);
+    }
+  }
+}
+
 function assignGrounds(zones: Zone[], opts: GeneratorOptions, rng: Rng): void {
+  if (opts.race === 'necromancer' && opts.preset !== 'wasteland') {
+    assignNecromancerGrounds(zones, rng);
+    return;
+  }
   const startPool = rng.shuffle([...(opts.preset === 'wasteland' ? WASTELAND_GROUNDS : START_GROUNDS)]);
   let k = 0;
   for (const z of zones) {
@@ -228,7 +256,9 @@ function assignGrounds(zones: Zone[], opts: GeneratorOptions, rng: Rng): void {
   }
 }
 
-function connectZones(grid: Grid, zoneOf: Int16Array, zones: Zone[], rng: Rng): Connection[] {
+function connectZones(grid: Grid, zoneOf: Int16Array, zones: Zone[], rng: Rng, teams: readonly number[] | null): Connection[] {
+  // The walled-in team (3) is reachable through exactly one connection per group of adjacent team zones.
+  const walled = (z: Zone) => teams !== null && z.kind === 'start' && teams[z.player] === 3;
   interface Edge {
     a: number;
     b: number;
@@ -253,7 +283,43 @@ function connectZones(grid: Grid, zoneOf: Int16Array, zones: Zone[], rng: Rng): 
   };
   const chosen: Edge[] = [];
   const rest: Edge[] = [];
+  const keepers = new Map<Edge, number>();
+  if (teams) {
+    // Group the walled-in zones that touch each other (own union-find), connect each group inside, then give it
+    // a single way out.
+    const group = zones.map((z) => z.id);
+    const groupOf = (i: number): number => {
+      while (group[i] !== i) i = group[i] = group[group[i] as number] as number;
+      return i;
+    };
+    for (const e of edges) {
+      if (walled(zones[e.a] as Zone) && walled(zones[e.b] as Zone) && groupOf(e.a) !== groupOf(e.b)) {
+        group[groupOf(e.a)] = groupOf(e.b);
+        parent[find(e.a)] = find(e.b);
+        chosen.push(e);
+      }
+    }
+    const inside = (e: Edge) => (walled(zones[e.a] as Zone) ? e.a : e.b);
+    const done = new Set<number>();
+    for (const z of zones.filter(walled)) {
+      const root = groupOf(z.id);
+      if (done.has(root)) continue;
+      // Shortest edge from the group to a neutral or center zone (any other zone if there is none).
+      const out = edges.filter((e) => walled(zones[e.a] as Zone) !== walled(zones[e.b] as Zone) && groupOf(inside(e)) === root);
+      const best = out.find((e) => (zones[inside(e) === e.a ? e.b : e.a] as Zone).kind !== 'start') ?? out[0];
+      if (!best) continue;
+      done.add(root);
+      parent[find(best.a)] = find(best.b);
+      chosen.push(best);
+      keepers.set(best, inside(best));
+    }
+  }
   for (const e of edges) {
+    if (chosen.includes(e)) continue;
+    if (teams && (walled(zones[e.a] as Zone) || walled(zones[e.b] as Zone))) {
+      rest.push(e);
+      continue;
+    }
     const ra = find(e.a);
     const rb = find(e.b);
     if (ra !== rb) {
@@ -266,13 +332,14 @@ function connectZones(grid: Grid, zoneOf: Int16Array, zones: Zone[], rng: Rng): 
   // Extra loops, avoiding direct start-to-start shortcuts.
   for (const e of rest) {
     const both = (zones[e.a] as Zone).kind === 'start' && (zones[e.b] as Zone).kind === 'start';
+    if (teams && (walled(zones[e.a] as Zone) || walled(zones[e.b] as Zone))) continue;
     if (!both && rng.chance(0.35)) chosen.push(e);
   }
 
   const connections: Connection[] = [];
   for (const e of chosen) {
     const gate = pickGate(grid, zoneOf, zones[e.a] as Zone, zones[e.b] as Zone);
-    if (gate) connections.push({ a: e.a, b: e.b, gateA: gate[0], gateB: gate[1] });
+    if (gate) connections.push({ a: e.a, b: e.b, gateA: gate[0], gateB: gate[1], ...(keepers.has(e) ? { keeper: keepers.get(e) as number } : {}) });
   }
   return connections;
 }

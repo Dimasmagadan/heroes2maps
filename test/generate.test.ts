@@ -137,4 +137,24 @@ describe('generator', () => {
     // Random artifacts are restricted to original artifacts.
     assert.ok([...plain.map.artifactMetadata.values()].some((m) => m.selected.length > 0));
   });
+
+  it('builds three teams: poor human, middle computers, rich walled-in computers', () => {
+    for (const [seed, size, players] of [[41, 72, 4], [42, 108, 5], [43, 144, 6]] as const) {
+      const r = generate({ seed, size, players, race: 'necromancer', teams: true });
+      checkMap(r.map, r.options);
+      assert.equal(r.map.alliances.length, 3);
+      assert.equal(r.map.alliances[0], 1);
+      assert.equal(r.map.alliances.reduce((a, b) => a | b, 0), (1 << players) - 1);
+      // Team 3 is reachable only through its keepers, and the keeper is a huge stack.
+      const walled = new Set(r.layout.zones.filter((z) => z.kind === 'start' && r.map.alliances[2]! & (1 << z.player)).map((z) => z.id));
+      const outside = r.layout.connections.filter((c) => walled.has(c.a) !== walled.has(c.b));
+      assert.ok(outside.length >= 1 && outside.every((c) => c.keeper !== undefined && walled.has(c.keeper)));
+      assert.ok(r.context.records.filter((x) => x.kind === 'guard' && (x.strength ?? 0) > 5000).length >= outside.length);
+      // The field of peasants: many big stacks of the weakest monster.
+      const peasants = [...r.map.monsterMetadata.values()].filter((m) => m.count >= 150);
+      assert.ok(peasants.length >= 6);
+      assert.ok(r.map.dailyEvents.some((e) => e.humanPlayerColors === 0 && e.computerPlayerColors === r.map.alliances[2]));
+    }
+    assert.throws(() => resolveOptions({ seed: 1, players: 3, teams: true }), /at least 4/);
+  });
 });

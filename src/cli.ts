@@ -31,6 +31,7 @@ const USAGE = `Usage:
       --race <r>            human player's faction: ${RACES.join(', ')} (default random); necromancer also tunes the map
       --victory <v>         ${VICTORY_CONDITIONS.join(', ')} (default normal)
       --expansion           include The Price of Loyalty objects and artifacts
+      --teams               human alone, computers split into a middle team and a rich team walled in behind one huge guard (4+ players)
       --name <text>         map name (default: generated)
       --out <file>          output .fh2m (default out/random_<seed>.fh2m)
       --install             also copy the map into the fheroes2 maps directory
@@ -112,6 +113,7 @@ function main(argv: string[]): number {
       victory: { type: 'string' },
       race: { type: 'string' },
       expansion: { type: 'boolean' },
+      teams: { type: 'boolean' },
       name: { type: 'string' },
       out: { type: 'string' },
       install: { type: 'boolean' },
@@ -141,6 +143,7 @@ function main(argv: string[]): number {
       if (values.race) partial.race = values.race as GeneratorOptions['race'];
       if (values.victory) partial.victory = values.victory as GeneratorOptions['victory'];
       if (values.expansion) partial.expansion = true;
+      if (values.teams) partial.teams = true;
       if (values.name !== undefined) partial.name = values.name;
 
       const started = Date.now();

@@ -29,6 +29,7 @@ node src/cli.ts generate --seed 123 --size 72 --players 4 --water medium --diffi
 | `--race <r>` | random, knight, barbarian, sorceress, warlock, wizard, necromancer (the human player's faction; computer players stay random) | random |
 | `--victory <v>` | normal, capture-town (a neutral town far away), artifact (a guarded major artifact) | normal |
 | `--expansion` | include The Price of Loyalty objects and artifacts | off |
+| `--teams` | three teams, needs 4+ players (see "Teams") | off |
 | `--name <text>` | map name (ASCII) | generated |
 | `--out <file>` | output file | `out/random_<seed>.fh2m` |
 | `--install` | copy the map into the fheroes2 maps directory | |
@@ -75,6 +76,19 @@ node src/cli.ts install  <map.fh2m>
 
 The object table (`src/data/`) is generated from the fheroes2 C++ source by `scripts/extract-objects.ts`. The
 script compiles fheroes2's own `map_object_info.cpp` with a small dump program, so no table is copied by hand.
+
+### Teams
+
+`--teams` splits the players into three alliances: team 1 is the human alone, team 3 is 1 computer (2 if there are 4
+or more computers) and team 2 is the other computers.
+
+- Team 3 starts rich: all rare mines plus a gold mine, 1.7 times the start content, a bigger zone, 10000 gold and some
+  resources on day 1, and 2500 gold every week. Its zones touch the rest of the map through a single connection per
+  group of team zones, held by one huge guard (about 6000 army strength at normal difficulty).
+- Team 1 starts poor: only one rare mine and half the start content.
+- Somewhere in a neutral zone at least two zones away from the human's start (in a far corner of it) lies a field of
+  12 peasant stacks of 150-350. They are weak, so beating them raises many skeletons for a necromancer: the army to
+  break the huge guard. One of the rumors hints at the field.
 
 ### Necromancer tuning
 

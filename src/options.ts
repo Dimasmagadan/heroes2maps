@@ -38,6 +38,9 @@ export interface GeneratorOptions {
   race: Race;
   // Include The Price of Loyalty objects and artifacts.
   expansion: boolean;
+  // Three teams (see playerTeams): the human alone, a middle team of computers, and a rich, walled-in team behind one
+  // powerful guard. Needs at least 4 players.
+  teams: boolean;
   name?: string;
 }
 
@@ -50,12 +53,22 @@ export const DEFAULT_OPTIONS: Omit<GeneratorOptions, 'seed'> = {
   victory: 'normal',
   race: 'random',
   expansion: false,
+  teams: false,
 };
 
 export function resolveOptions(partial: Partial<GeneratorOptions> & { seed: number }): GeneratorOptions {
   const options: GeneratorOptions = { ...DEFAULT_OPTIONS, ...partial };
   validateOptions(options);
   return options;
+}
+
+// Team (1-3) of every player index. Team 1 is the human, team 3 the computers with the best start (1 computer for up
+// to 3 computers, otherwise 2), team 2 the rest.
+export function playerTeams(o: Pick<GeneratorOptions, 'players' | 'teams'>): number[] {
+  if (!o.teams) return Array.from({ length: o.players }, (_, i) => i + 1);
+  const computers = o.players - 1;
+  const team3 = computers >= 4 ? 2 : 1;
+  return Array.from({ length: o.players }, (_, i) => (i === 0 ? 1 : i <= computers - team3 ? 2 : 3));
 }
 
 export function validateOptions(o: GeneratorOptions): void {
@@ -65,6 +78,8 @@ export function validateOptions(o: GeneratorOptions): void {
   if (!Number.isInteger(o.players) || o.players < min || o.players > max) {
     throw new Error(`Invalid player count ${o.players} for size ${o.size}: expected ${min}-${max} (human included)`);
   }
+  if (o.teams && o.players < 4) throw new Error(`Teams need at least 4 players (got ${o.players})`);
+  if (o.teams && o.preset === 'islands') throw new Error('Teams are not available on the islands preset');
   if (!WATER_LEVELS.includes(o.water)) throw new Error(`Invalid water level ${o.water}: expected one of ${WATER_LEVELS.join(', ')}`);
   if (!DIFFICULTIES.includes(o.difficulty)) throw new Error(`Invalid difficulty ${o.difficulty}: expected one of ${DIFFICULTIES.join(', ')}`);
   if (!PRESETS.includes(o.preset)) throw new Error(`Invalid preset ${o.preset}: expected one of ${PRESETS.join(', ')}`);

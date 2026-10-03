@@ -31,6 +31,12 @@ export const RUMORS: readonly string[] = [
   'Peasants whisper of shrines that teach forgotten spells.',
 ];
 
+// Hints for the teams option: where the human's way to victory lies.
+export const PEASANT_RUMORS: readonly string[] = [
+  'A great crowd of peasants wanders far from any castle. A necromancer would know what to do with them.',
+  'Beyond the nearest borders there is a field so full of peasants that the ground cannot be seen.',
+];
+
 export const SIGN_MESSAGES: readonly string[] = [
   'Welcome, traveler. Guard your mines well.',
   'Beyond the pass lie riches and danger in equal measure.',
