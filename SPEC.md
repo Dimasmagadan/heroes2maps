@@ -36,23 +36,85 @@ targeting the **fheroes2 `.fh2m` format (version 13)**. Maps are played in fhero
 
 ## Relation to fheroes2's generator
 
-fheroes2 ships its own random map generator. Since the project is GPL anyway, porting from it is allowed.
-Before step 4, read it and record here:
+fheroes2 ships its own random generator. Since the project is GPL anyway, porting from it is allowed.
+Read for 1.1.17 (`map_random_generator*.cpp`). Its design: regions grown from seeds on two rings, border tiles turned
+into tree walls, connectors between regions, castles at region centers, mines placed in tile "rings" around the
+castle, prefab object sets (treasures behind trees) with a monster in front, decorations by ground, and
+`forceTempRoadOnTile` roads to everything.
 
-- what is reused directly (candidates: object placement helpers, region/zone handling, validation),
-- what is written from scratch and why (expected: richer zone layout, value budgets, varied single-player content).
+Reused directly (ported):
+
+- `selectTerrainVariantForObject` idea and its tree/mountain tables, generalized: art sets per ground in
+  `src/objects.ts` (`ICN_TERRAINS`).
+- `objectGoldValue` (gold-equivalent values of objects), extended to all objects we place: `src/content/catalog.ts`.
+- Index helpers `getTownBasementId`, `getMineObjectInfoId`, hero/flag sprite layout: `src/content/catalog.ts`.
+- Castle placement recipe (basement + town with one UID, flags on both sides, hero on the entrance, entrance road):
+  `placeCastle` in `src/content/content.ts`.
+- "Action objects need a free tile below them" (`canPlaceObject`), and guards on the entrance tile of mines.
+- `getMonstersByValue` idea of guards scaled by value, but replaced by explicit stacks sized by fheroes2 monster strength.
+
+Written from scratch, and why:
+
+- Layout: noisy weighted Voronoi zones with a start ring, a center zone and an MST + loops connection graph
+  (`src/layout/zones.ts`); fheroes2 only supports a mirrored two-ring layout and needs a full `world`/Editor instance.
+- Value budgets per zone that grow with distance from the nearest start, fair per-player mine kits, unguarded pickup
+  scatter calibrated against the fixture maps, water presets (continent, lakes, islands with boats, wasteland).
+- Reachability validation and repair against a conservative model of the game's movement rules (fheroes2's generator
+  relies on its region structure and does not validate).
+- Everything runs without the fheroes2 engine: all tables are generated (`scripts/extract-objects.ts`) and the
+  terrain/road/stream logic of `map_format_helper.cpp` is ported (`src/terrain/`).
 
 ## Current state
 
-Step 1 is done (commit `3bf859c`):
+All steps are implemented. Summary of what exists and what was learned:
 
-- `src/fh2m/stream.ts` — big-endian Reader/Writer
-- `src/fh2m/types.ts` — typed map model (`MapFormat`, `TileInfo`, `ObjectGroup`, metadata structures)
-- `src/fh2m/codec.ts` — `decodeMap`, `encodeMap`, `encodeBody`, `inflateBody`
-- `test/roundtrip.test.ts` — 9 bundled v13 maps: the decompressed body re-encodes byte-for-byte, and `decodeMap(encodeMap(map))` equals the decoded map
-- Only version 13 is read. Older versions are rejected on purpose.
+- Step 1: codec (`src/fh2m`), unchanged.
+- Step 1b: `scripts/smoke.ts` writes a modified fixture into the fheroes2 maps directory. Beyond the manual check,
+  `tools/fh2check` (built by `scripts/build-fh2check.sh` against a debug build of fheroes2 1.1.17) loads any map with
+  the game's own code (`World::loadResurrectionMap`, debug asserts on) and reports the game's tile passability;
+  `node src/cli.ts check <map>` and `test/game.test.ts` use it when `$FH2CHECK` is set. All fixtures and all
+  generated maps of the seed sweep load without asserts. It caught two real bugs (wrong `BUILD_CASTLE` value,
+  random castles' passability) that our own decoder could not.
+- Step 2: `scripts/extract-objects.ts` compiles `map_object_info.cpp`, `monster_info.cpp`, `monster.cpp` and
+  `mp2.cpp` with a dump program (stubs in `scripts/extract-stubs.cpp`) and writes `src/data/{objects,enums,monsters}.ts`:
+  all objects with parts, layers and metadata, per-type action flags (entry directions, pickup, capture), enums
+  (object/ICN types, grounds and image ranges, races, resources, heroes, monsters, buildings), artifact levels and
+  expansion flags (parsed from `Artifact::Level`), monster stats and strength. Query API: `src/objects.ts`.
+  Answers to the open questions:
+  - Layer types: OBJECT and BACKGROUND parts affect passability; SHADOW and TERRAIN parts (roads, streams, the castle
+    entrance road) do not. An action part (MP2 type with bit 128) makes its tile enterable only from
+    `getActionObjectDirection(type)`; the hero stops there. A non-action part gets "center row + bottom row"
+    passability, which `updatePassability` often clears; the game does let heroes step onto some object bottom
+    rows. Our model treats all non-action object tiles as blocked: it is stricter than the game (verified against
+    fh2check on all fixtures and sweep maps: never more permissive), which is safe for generation.
+  - Castles: `LANDSCAPE_TOWN_BASEMENTS` (index by ground) and `KINGDOM_TOWNS` on the same tile with the same UID,
+    `LANDSCAPE_FLAGS` (color * 2, +1 for the right flag) on the tiles left and right with the same UID; the owner
+    color comes from the flags (6 = neutral). Random castles/towns become real towns at game start and get castle
+    passability.
+  - Heroes: `KINGDOM_HEROES` index = color * 7 + race (6 = random race).
+  - Valid map: at least one player (castle or hero), human/computer colors covering the available colors, castle
+    metadata with `BUILD_CASTLE` or `BUILD_TENT` matching castle/town, hero metadata race matching the object,
+    metadata entries for monsters/artifacts/signs/events/sphinxes, victory/loss metadata as `FileInfo` expects.
+- Step 3: `src/rng.ts` (sfc32 + labeled forks), `src/terrain/ground.ts`, `transitions.ts` (port; agrees with all 9
+  fixtures modulo variants, idempotent because existing variants are kept), `roads.ts` (roads and streams; agrees with
+  all fixture roads), `noise.ts`, `landscape.ts`, previews in `src/preview/`.
+  fheroes2's diagonal rule matters for routing: a hero cannot move diagonally past a tall object beside the lower
+  tile, so roads and corridors only take diagonal steps whose side tile stays free (`diagonalSideTile`).
+- Step 4: `src/content/` (builder/placement engine, catalog, guards, content, roads, decoration, repair),
+  `src/validate.ts`, `src/generate.ts`. Water-aware reachability with boats.
+- Step 5: `src/cli.ts`, `src/options.ts`, `src/summary.ts`, PNG/ASCII previews, `--install`.
+- Step 6: `test/` (codec, object table, terrain, roads, validator, placement, generator, statistics against fixture
+  ranges, seed sweep), `scripts/sweep.ts` (parallel 100-seed sweep over all sizes and player counts, optional game check).
+  Last full run (2026-10-03): 1500 maps (100 seeds x 15 size/player combinations, rotating water/preset/difficulty/
+  victory/expansion), 0 failures with `--check`; 18 maps needed a retry. Single-threaded generation takes about
+  0.1 s (36), 0.4 s (72), 1.5 s (108) and 3.5 s (144).
+- Step 7: presets, themed names/texts, expansion content behind `--expansion`, README. Not done: `.mp2` export,
+  web UI, cp1251 texts (all optional).
+- Type checking: `typescript` and `@types/node` are installed as dev dependencies; `npm run typecheck` passes.
 
-### Step 1b — In-game smoke test (do next)
+Still manual: playing a generated map in fheroes2 (visual check, AI turns). See step 6 checklist.
+
+### Step 1b — In-game smoke test
 
 Prove fheroes2 accepts files written by our encoder, not only our own decoder:
 

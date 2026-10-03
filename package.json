@@ -4,7 +4,17 @@
   "private": true,
   "type": "module",
   "description": "Random map generator for Heroes of Might and Magic II (fheroes2 .fh2m format)",
+  "license": "GPL-2.0-or-later",
+  "engines": {
+    "node": ">=26"
+  },
   "scripts": {
-    "test": "node --test test/"
+    "test": "node --test test/",
+    "typecheck": "tsc -p .",
+    "generate": "node src/cli.ts generate"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.4",
+    "typescript": "^7.0.2"
   }
 }
