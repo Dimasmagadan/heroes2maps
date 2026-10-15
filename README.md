@@ -29,7 +29,9 @@ node src/cli.ts generate --seed 123 --size 72 --players 4 --water medium --diffi
 | `--race <r>` | random, knight, barbarian, sorceress, warlock, wizard, necromancer (the human player's faction; computer players stay random) | random |
 | `--victory <v>` | normal, capture-town (a neutral town far away), artifact (a guarded major artifact) | normal |
 | `--expansion` | include The Price of Loyalty objects and artifacts | off |
-| `--teams` | three teams, needs 4+ players (see "Teams") | off |
+| `--teams` | two alliances in-game (human vs all computers) and a rich walled-in computer team behind one huge guard; needs 4+ players (see "Teams") | off |
+| `--twist` | mid-game twist: on day 21 every computer gets a windfall (25000 gold, resources); a guarded crypt in the farthest neutral zone gives the human the counter (8000 exp, 12000 gold, rare resources, a major artifact); a rumor hints at it | off |
+| `--tale` | scenario "Koschei the Deathless": Russian texts (cp1251, language 4), Koschei vs the heroes of Russian tales, prisons with friendly heroes, the place of power; implies necromancer, expansion and twist; size 72+ (see "Tale") | off |
 | `--name <text>` | map name (ASCII) | generated |
 | `--out <file>` | output file | `out/random_<seed>.fh2m` |
 | `--install` | copy the map into the fheroes2 maps directory | |
@@ -79,16 +81,36 @@ script compiles fheroes2's own `map_object_info.cpp` with a small dump program, 
 
 ### Teams
 
-`--teams` splits the players into three alliances: team 1 is the human alone, team 3 is 1 computer (2 if there are 4
-or more computers) and team 2 is the other computers.
+`--teams` needs 4+ players. In-game it creates two alliances — the `.fh2m` format (and fheroes2) supports only two
+sides, and they apply only to the victory condition "defeat the other side", which the map sets: side 1 is the
+human, side 2 all computers. The normal victory (defeating everyone) wins too. The three-tier economy below stays
+as map design; the middle computers simply share the walled team's side.
 
-- Team 3 starts rich: all rare mines plus a gold mine, 1.7 times the start content, a bigger zone, 10000 gold and some
-  resources on day 1, and 2500 gold every week. Its zones touch the rest of the map through a single connection per
-  group of team zones, held by one huge guard (about 6000 army strength at normal difficulty).
-- Team 1 starts poor: only one rare mine and half the start content.
+- Team 3 (the walled-in computers) starts rich: all rare mines plus a gold mine, 1.7 times the start content, a bigger
+  zone, 10000 gold and some resources on day 1, and 2500 gold every week. Its zones are sealed by a wall of obstacles
+  that the generator never removes, with a single way in per group of team zones: a gate held by one huge guard
+  standing on the road — about 3600 army strength on easy, 6000 on normal and 11400 on expert difficulty. Roads and
+  corridors keep off the wall, the zones never touch water, and the generator verifies the seal on every map; the
+  seed sweep checks it too.
+- Team 1 (the human) starts poor: only one rare mine and half the start content.
 - Somewhere in a neutral zone at least two zones away from the human's start (in a far corner of it) lies a field of
-  12 peasant stacks of 150-350. They are weak, so beating them raises many skeletons for a necromancer: the army to
-  break the huge guard. One of the rumors hints at the field.
+  12 peasant stacks of 150-350. They are weak by design and passing AI heroes may clear the field; beating them still
+  raises many skeletons for a necromancer: the army to break the huge guard. One of the rumors hints at the field.
+
+### Tale
+
+`--tale` builds a story map. The human is Koschei the Deathless (necromancer), who abducted Marya Morevna; the computers
+are Ilya Muromets, Ivan Tsarevich, Vasilisa the Wise, Sadko and Dobrynya Nikitich, each with a fixed faction. All
+texts are Russian, stored as cp1251 with the map language set to Russian (switch the game to Russian to read them).
+
+- Prisons with friendly heroes (the villains of the tales): Baba Yaga (Necromancy, Wisdom), Zmey Gorynych and
+  Solovey the Robber, each behind a guard in a neutral zone.
+- The Bald Mountain, a place of power in a neutral zone: Tree of Knowledge, Arena, Gazebo and Baba Yaga's hut
+  (Wisdom), each guarded, with a sign. A witch's hut cannot teach Necromancy in fheroes2, hence Baba Yaga in prison.
+- The twist: day 21, "the Grey Wolf shows the heroes the way to Buyan" gives every computer 25000 gold and resources.
+  The counter is the oak on Buyan, a guarded event object in the farthest neutral zone (8000 experience, 12000 gold,
+  rare resources, a major artifact). A necromancer cannot build a tavern, so the hint sits on a sign far from the castle.
+- No Sphinx (the riddle answers would have to be typed in cp1251). Neutral towns and castles get names from the tales.
 
 ### Necromancer tuning
 

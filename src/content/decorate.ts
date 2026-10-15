@@ -1,6 +1,7 @@
 // Landscape decoration: rivers, walls of obstacles along zone borders (left open only at the guarded gates) and
 // clustered forests, mountains, rocks and small details inside zones.
 
+import { GenerationError } from '../errors.ts';
 import { ObjectGroup } from '../fh2m/types.ts';
 import { NEIGHBOR_DIRECTIONS, ORTHOGONAL_DIRECTIONS } from '../grid.ts';
 import { findObjects, fitsTerrain, type ObjectInfo } from '../objects.ts';
@@ -9,6 +10,7 @@ import { ValueNoise } from '../terrain/noise.ts';
 import { containsRoad } from '../terrain/transitions.ts';
 import { Reserve } from './builder.ts';
 import type { ContentContext } from './content.ts';
+import { noBuildTiles, sealInfo, type SealInfo } from './seal.ts';
 
 interface ObstacleSets {
   big: ObjectInfo[]; // mountains and multi-tile tree groups
@@ -109,10 +111,58 @@ export function placeRivers(ctx: ContentContext, count: number): number {
 
 // --- Zone borders ---
 
+// Places a single-tile obstacle tagged `keeper`: the walled-in team's seal must never be removed by the
+// reachability repair. Streams and road-diagonal side tiles (KEEP_CLEAR) may carry an obstacle.
+function placeKeeperObstacle(ctx: ContentContext, t: number): boolean {
+  const b = ctx.b;
+  const g = ctx.grid;
+  const sets = obstacleSets(b.ground(t), ctx.opts.expansion);
+  const options = ctx.rng.shuffle([...sets.small, ...sets.trees.filter((o) => o.occupied.length === 1)]);
+  for (const info of options) {
+    if (b.place(info.group, info.index, g.x(t), g.y(t), { tag: 'keeper', allowReserved: [Reserve.KEEP_CLEAR] })) return true;
+  }
+  // Any single-tile landscape object regardless of its art, rather than an open border.
+  for (const info of ctx.rng.shuffle([...sets.small])) {
+    if (b.place(info.group, info.index, g.x(t), g.y(t), { tag: 'keeper', allowReserved: [Reserve.KEEP_CLEAR], anyTerrain: true })) return true;
+  }
+  return false;
+}
+
+// Fallback for a border tile that cannot take an obstacle (a road, an object entrance): block every neighboring
+// tile outside the walled zones instead — one blocked tile per crossing pair is enough to seal. `avoid` lists
+// tiles that must stay open (corridor lines); an avoid-neighbor that needs walling makes the seal impossible.
+export function sealFromNeighbors(ctx: ContentContext, seal: SealInfo, t: number, avoid?: ReadonlySet<number>): boolean {
+  const b = ctx.b;
+  const g = ctx.grid;
+  let sealed = true;
+  for (const d of NEIGHBOR_DIRECTIONS) {
+    const n = g.neighbor(t, d);
+    if (n < 0 || seal.zones.has(ctx.layout.zoneOf[n] as number)) continue;
+    if (seal.keeperGates.has(n) || seal.internalGates.has(n)) continue; // intended crossings stay open
+    if (avoid?.has(n)) {
+      sealed = false;
+      continue;
+    }
+    if (b.isWater(n)) {
+      sealed = false;
+      continue;
+    }
+    if (!b.isFree(n)) {
+      // Already walled — but only real walls seal; anything the hero can pass is an open crossing.
+      const p = b.objects.get(b.occupant[n] as number);
+      if (!p || (p.tag !== 'keeper' && p.tag !== 'border')) sealed = false;
+      continue;
+    }
+    if (b.reserved[n] === Reserve.ROAD || b.reserved[n] === Reserve.ACCESS || !placeKeeperObstacle(ctx, n)) sealed = false;
+  }
+  return sealed;
+}
+
 export function wallZoneBorders(ctx: ContentContext): void {
   const b = ctx.b;
   const g = ctx.grid;
   const zoneOf = ctx.layout.zoneOf;
+  const seal = sealInfo(ctx);
   const band: number[] = [];
   for (let t = 0; t < g.size; ++t) {
     if (b.isWater(t) || (ctx.borderDist[t] as number) > 1) continue;
@@ -127,20 +177,56 @@ export function wallZoneBorders(ctx: ContentContext): void {
     if ((ctx.borderDist[t] as number) === 0 && !touchesOtherZone && onMapEdge) continue;
     band.push(t);
   }
+  // Obstacles covering a walled-team border tile are part of the seal and must never be removed by the repair.
+  // They must be single-tile and lie entirely inside the walled zones: a wall reaching over the border would
+  // seal the roads and paths around the keeper gate, and one reaching inward would be an uncarvable barrier
+  // between the gate and the team's castle.
+  const tryPlace = (info: ObjectInfo, t: number): boolean => {
+    let coversSeal = false;
+    if (seal.border.size > 0) {
+      for (const o of info.occupied) {
+        const x = g.x(t) + o.dx;
+        const y = g.y(t) + o.dy;
+        if (!g.inside(x, y)) continue;
+        if (!seal.border.has(g.index(x, y))) continue;
+        coversSeal = true;
+        break;
+      }
+      if (coversSeal) {
+        if (info.occupied.length !== 1) return false;
+        for (const o of info.occupied) {
+          const x = g.x(t) + o.dx;
+          const y = g.y(t) + o.dy;
+          if (g.inside(x, y) && !seal.zones.has(zoneOf[g.index(x, y)] as number)) return false;
+        }
+        return b.place(info.group, info.index, g.x(t), g.y(t), { tag: 'keeper' }) !== null;
+      }
+    }
+    return b.place(info.group, info.index, g.x(t), g.y(t), { tag: 'border' }) !== null;
+  };
   ctx.rng.shuffle(band);
   // Big obstacles first, then single tiles to close the gaps.
   for (const t of band) {
     if (!b.isFree(t) || b.reserved[t] !== Reserve.NONE) continue;
     const sets = obstacleSets(b.ground(t), ctx.opts.expansion);
     const options = ctx.rng.shuffle([...sets.big]);
-    for (const info of options.slice(0, 8)) if (tryPlace(ctx, info, t, 'border')) break;
+    for (const info of options.slice(0, 8)) if (tryPlace(info, t)) break;
   }
   for (const t of band) {
     if (!b.isFree(t) || b.reserved[t] !== Reserve.NONE) continue;
     if ((ctx.borderDist[t] as number) > 0) continue;
     const sets = obstacleSets(b.ground(t), ctx.opts.expansion);
     for (const info of ctx.rng.shuffle([...sets.small, ...sets.trees.filter((o) => o.occupied.length <= 2)]).slice(0, 10)) {
-      if (tryPlace(ctx, info, t, 'border')) break;
+      if (tryPlace(info, t)) break;
+    }
+  }
+  // Guaranteed seal of the walled-in team: every border tile that is still open gets an obstacle.
+  for (const t of [...seal.border].sort((p, q) => p - q)) {
+    if (b.isWater(t)) throw new GenerationError(`Walled team zone contains water at ${g.x(t)},${g.y(t)}`);
+    if (seal.keeperGates.has(t)) continue; // the guarded crossing stays open
+    if (!b.isFree(t)) continue; // already blocked by a keeper-tagged wall from the passes above
+    if (seal.internalGates.has(t) || !placeKeeperObstacle(ctx, t)) {
+      if (!sealFromNeighbors(ctx, seal, t)) throw new GenerationError(`Cannot seal the walled team border at ${g.x(t)},${g.y(t)}`);
     }
   }
 }
@@ -150,14 +236,21 @@ export function wallZoneBorders(ctx: ContentContext): void {
 export function decorateZones(ctx: ContentContext, density: number): void {
   const b = ctx.b;
   const g = ctx.grid;
+  // Never decorate the walled team's seal: obstacles there are keeper-tagged, and internal gate tiles must stay open.
+  const seal = sealInfo(ctx);
+  const sealZones = seal.zones;
+  const noBuild = noBuildTiles(seal);
+  const coversNoBuild = (info: ObjectInfo, t: number) => noBuild.size > 0 && info.occupied.some((o) => noBuild.has(g.index(g.x(t) + o.dx, g.y(t) + o.dy)));
   const forest = new ValueNoise(ctx.rng.fork('forest-noise'));
   const hills = new ValueNoise(ctx.rng.fork('hill-noise'));
   for (const zone of ctx.layout.zones) {
     const land = zone.tiles.filter((t) => !b.isWater(t));
     if (land.length === 0) continue;
-    const target = Math.round(land.length * density);
+    // Walled zones stay more open: their content is denser and every pocket behind the seal is a liability.
+    const zoneDensity = sealZones.size > 0 && sealZones.has(zone.id) ? density * 0.7 : density;
+    const target = Math.round(land.length * zoneDensity);
     let blocked = land.filter((t) => !b.isFree(t)).length;
-    const candidates = ctx.rng.shuffle(land.filter((t) => b.isFree(t) && b.reserved[t] === Reserve.NONE));
+    const candidates = ctx.rng.shuffle(land.filter((t) => b.isFree(t) && b.reserved[t] === Reserve.NONE && !noBuild.has(t)));
     // Prefer tiles inside forest/mountain noise blobs so obstacles form clusters.
     const score = (t: number) => Math.max(forest.fbm(g.x(t) / 7, g.y(t) / 7, 3), hills.fbm(g.x(t) / 9, g.y(t) / 9, 3));
     candidates.sort((p, q) => score(q) - score(p) || p - q);
@@ -170,7 +263,7 @@ export function decorateZones(ctx: ContentContext, density: number): void {
       const pool = h > f && sets.mountains.length > 0 ? sets.mountains : sets.trees.length > 0 && ctx.rng.chance(0.75) ? sets.trees : sets.details;
       if (pool.length === 0) continue;
       for (const info of ctx.rng.shuffle([...pool]).slice(0, 6)) {
-        if (tryPlace(ctx, info, t, 'decoration')) {
+        if (!coversNoBuild(info, t) && tryPlace(ctx, info, t, 'decoration')) {
           blocked += info.occupied.length;
           break;
         }
@@ -179,7 +272,7 @@ export function decorateZones(ctx: ContentContext, density: number): void {
     // Small details (rocks, shrubs, flowers, single trees) and a few non-blocking ground details for texture.
     const detailTarget = Math.round(land.length * 0.05);
     let details = 0;
-    for (const t of ctx.rng.shuffle(land.filter((x) => b.isFree(x) && b.reserved[x] === Reserve.NONE))) {
+    for (const t of ctx.rng.shuffle(land.filter((x) => b.isFree(x) && b.reserved[x] === Reserve.NONE && !noBuild.has(x)))) {
       if (details >= detailTarget) break;
       const sets = obstacleSets(b.ground(t), ctx.opts.expansion);
       const pool = [...sets.small, ...sets.details.filter((o) => o.occupied.length <= 3)];

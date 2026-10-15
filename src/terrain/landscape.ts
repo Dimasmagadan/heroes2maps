@@ -8,9 +8,10 @@
 //   3. Biomes: each zone's ground with noise patches of a secondary ground, beaches along coasts, then smoothing so
 //      that tiles have enough same-ground neighbors for clean transitions.
 
+import { GenerationError } from '../errors.ts';
 import { Grid, NEIGHBOR_DIRECTIONS, ORTHOGONAL_DIRECTIONS } from '../grid.ts';
-import type { Layout, Zone } from '../layout/zones.ts';
-import type { GeneratorOptions } from '../options.ts';
+import { walledBorderTiles, walledZoneIds, type Layout, type Zone } from '../layout/zones.ts';
+import { playerTeams, type GeneratorOptions } from '../options.ts';
 import type { Rng } from '../rng.ts';
 import { Ground } from './ground.ts';
 import { ValueNoise } from './noise.ts';
@@ -43,6 +44,23 @@ export function generateLandscape(layout: Layout, opts: GeneratorOptions, rng: R
   const zones = layout.zones;
   const protectedLand = new Uint8Array(grid.size);
 
+  // The walled-in team (teams option): its land is never water, and no water comes within a tile of it (a hero
+  // could sail along the wall and disembark). Corridor legs inside the walled zones keep off its border ring,
+  // so the wall ring that seals the team later can cover every border tile.
+  const teams = playerTeams(opts);
+  const walled = walledZoneIds(zones, opts.teams ? teams : null);
+  const border = walledBorderTiles(grid, zoneOf, zones, walled);
+  for (const z of zones) {
+    if (!walled.has(z.id)) continue;
+    for (const t of z.tiles) {
+      protectedLand[t] = 1;
+      for (const d of NEIGHBOR_DIRECTIONS) {
+        const n = grid.neighbor(t, d);
+        if (n >= 0) protectedLand[n] = 1;
+      }
+    }
+  }
+
   // --- Corridors ---
   const corridorNoise = new ValueNoise(rng.fork('corridor-noise'));
   const corridors: number[][] = [];
@@ -50,9 +68,56 @@ export function generateLandscape(layout: Layout, opts: GeneratorOptions, rng: R
     const za = zones[c.a] as Zone;
     const zb = zones[c.b] as Zone;
     const cost = (t: number) => 1 + corridorNoise.fbm(grid.x(t) / 5, grid.y(t) / 5, 2) * 3;
-    const legA = shortestPath(grid, za.seed, c.gateA, (t) => zoneOf[t] === c.a, cost, (side) => zoneOf[side] === c.a) ?? [za.seed, c.gateA];
-    const legB = shortestPath(grid, c.gateB, zb.seed, (t) => zoneOf[t] === c.b, cost, (side) => zoneOf[side] === c.b) ?? [c.gateB, zb.seed];
-    const line = [...legA, ...legB];
+    const legPass = (zoneId: number): { pass: (t: number) => boolean; diagonalOk: (t: number) => boolean } => {
+      const base = (t: number) => zoneOf[t] === zoneId;
+      if (!walled.has(zoneId)) return { pass: base, diagonalOk: base };
+      // The corridor may cross the border ring where the interior splits (narrow zone necks); the crossing tile
+      // stays open as a slit and the seal walls its outside neighbors. Diagonal ring crossings are not allowed:
+      // their side tiles get walled and would cut the corridor.
+      return { pass: base, diagonalOk: (t: number) => !border.has(t) };
+    };
+    // The walled side's leg ends just inside the border ring, orthogonally to the gate: the wall then meets the
+    // road at the gate without closing around it, and a diagonal approach would be blocked by fheroes2's
+    // diagonal rule as soon as the wall stands beside the gate.
+    const inward = (zoneId: number, gate: number) => {
+      if (!walled.has(zoneId)) return gate;
+      const candidates = ORTHOGONAL_DIRECTIONS.map((d) => grid.neighbor(gate, d)).filter((t) => t >= 0 && zoneOf[t] === zoneId && !border.has(t));
+      if (candidates.length === 0) return gate;
+      const seed = (zones[zoneId] as Zone).seed;
+      return candidates.reduce((best, t) => (grid.euclid(t, seed) < grid.euclid(best, seed) ? t : best));
+    };
+    const targetA = inward(c.a, c.gateA);
+    const targetB = inward(c.b, c.gateB);
+    const passA = legPass(c.a);
+    const passB = legPass(c.b);
+    let legA = shortestPath(grid, za.seed, targetA, passA.pass, cost, passA.diagonalOk);
+    let legB = shortestPath(grid, targetB, zb.seed, passB.pass, cost, passB.diagonalOk);
+    // The corridor's ring crossings become slits: open for the team, with every outside neighbor walled. The
+    // other side's corridor keeps off those neighbors, so the seal has the space it needs.
+    const slitOutside = (leg: number[], walledZone: number) => {
+      const blocked = new Set<number>();
+      for (const t of leg) {
+        if (!border.has(t)) continue;
+        for (const d of NEIGHBOR_DIRECTIONS) {
+          const n = grid.neighbor(t, d);
+          if (n >= 0 && !walled.has(zoneOf[n] as number) && n !== c.gateA && n !== c.gateB) blocked.add(n);
+        }
+      }
+      return blocked;
+    };
+    if (walled.has(c.a) && legA) {
+      const blocked = slitOutside(legA, c.a);
+      if (blocked.size > 0) legB = shortestPath(grid, targetB, zb.seed, (t) => passB.pass(t) && !blocked.has(t), cost, (t) => passB.diagonalOk(t) && !blocked.has(t)) ?? legB;
+    }
+    if (walled.has(c.b) && legB) {
+      const blocked = slitOutside(legB, c.b);
+      if (blocked.size > 0) legA = shortestPath(grid, za.seed, targetA, (t) => passA.pass(t) && !blocked.has(t), cost, (t) => passA.diagonalOk(t) && !blocked.has(t)) ?? legA;
+    }
+    // A walled zone's corridor must reach its gate over open interior tiles: without it the wall closes around
+    // the gate and the team is unreachable behind it. Other zones fall back to a straight line.
+    if (walled.has(c.a) && !legA) throw new GenerationError(`No corridor through the walled team zone ${c.a} to its gate`);
+    if (walled.has(c.b) && !legB) throw new GenerationError(`No corridor through the walled team zone ${c.b} to its gate`);
+    const line = [...(legA ?? [za.seed, c.gateA]), ...(legB ?? [c.gateB, zb.seed])];
     // Keep diagonal steps walkable: their side tiles become part of the corridor.
     for (let i = 1; i < line.length; ++i) {
       const side = diagonalSideTile(grid, line[i - 1] as number, line[i] as number);

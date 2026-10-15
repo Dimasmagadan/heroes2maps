@@ -6,8 +6,9 @@
 // dwellings and power-ups, each guarded by monsters scaled to its value, the zone distance and the difficulty.
 
 import { artifacts, objectTypes } from '../data/enums.ts';
+import { GenerationError } from '../errors.ts';
 import { ObjectGroup } from '../fh2m/types.ts';
-import { Direction, Grid, NEIGHBOR_DIRECTIONS } from '../grid.ts';
+import { Direction, Grid, NEIGHBOR_DIRECTIONS, ORTHOGONAL_DIRECTIONS } from '../grid.ts';
 import type { Layout, Zone } from '../layout/zones.ts';
 import { findObjects, getObjectInfo, type ObjectInfo } from '../objects.ts';
 import type { GeneratorOptions } from '../options.ts';
@@ -32,6 +33,8 @@ import {
   type ResourceName,
 } from './catalog.ts';
 import { DIFFICULTY_FACTOR, chooseGuard, guardStrength } from './monsters.ts';
+import { sealInfo } from './seal.ts';
+import { MovementModel, guardedTiles } from '../validate.ts';
 
 export type ContentKind = 'castle' | 'hero' | 'mine' | 'resource' | 'treasure' | 'artifact' | 'dwelling' | 'powerup' | 'guard' | 'boat' | 'misc';
 
@@ -65,6 +68,8 @@ export class ContentContext {
   // Land region (8-connected land component) of each tile, -1 for water.
   readonly region: Int32Array;
   readonly records: ContentRecord[] = [];
+  // Objects the map cannot do without (scenario objects); generation fails if the repair removed one.
+  readonly required = new Set<number>();
   readonly castles: CastleSite[] = [];
   // Land regions that heroes can reach (all regions with content).
   readonly usableRegions = new Set<number>();
@@ -212,13 +217,28 @@ export function placeCastle(ctx: ContentContext, zone: Zone, colorIndex: number,
         meta.defenderMonsterCount = [0, 0, 0, 0, 0];
       }
     }
-    b.reserve(entrance, Reserve.ACCESS);
-    b.reserve(below, Reserve.ROAD);
+    // Reservations are undone when the candidate is rejected, so no stale keep-clear areas remain.
+    const reservedBefore: [number, number][] = [];
+    const reserve = (i: number, kind: number) => {
+      reservedBefore.push([i, b.reserved[i] as number]);
+      b.reserve(i, kind);
+    };
+    reserve(entrance, Reserve.ACCESS);
+    // ACCESS, not ROAD: a road starts here later, but another castle's body must not cover the approach.
+    reserve(below, Reserve.ACCESS);
     // Keep a ring around the castle free of obstacles.
     for (let yy = y - 1; yy <= y + 3; ++yy) {
       for (let xx = x - 3; xx <= x + 3; ++xx) {
-        if (g.inside(xx, yy) && b.isFree(g.index(xx, yy))) b.reserve(g.index(xx, yy), Reserve.KEEP_CLEAR);
+        if (g.inside(xx, yy) && b.isFree(g.index(xx, yy))) reserve(g.index(xx, yy), Reserve.KEEP_CLEAR);
       }
+    }
+    // The entrance approach must reach the open area of the zone through free land: the castle's own body plus
+    // nearby obstacles or a lake could otherwise seal the pocket behind the entrance, and the reachability
+    // repair could not reopen it (castle bodies are never removed).
+    if (!entranceConnects(ctx, below, zone.seed)) {
+      b.remove(uid);
+      for (const [i, v] of reservedBefore) b.reserved[i] = v;
+      continue;
     }
     const site: CastleSite = { zone: zone.id, player: colorIndex === NEUTRAL_COLOR_INDEX ? -1 : colorIndex, tile: t, uid: placed.uid };
     ctx.castles.push(site);
@@ -226,6 +246,25 @@ export function placeCastle(ctx: ContentContext, zone: Zone, colorIndex: number,
     return site;
   }
   return null;
+}
+
+// Orthogonal flood through free land, from `from` to `target`.
+function entranceConnects(ctx: ContentContext, from: number, target: number): boolean {
+  const g = ctx.grid;
+  if (from === target) return true;
+  const seen = new Set<number>([from]);
+  const queue = [from];
+  for (let h = 0; h < queue.length; ++h) {
+    const cur = queue[h] as number;
+    for (const d of ORTHOGONAL_DIRECTIONS) {
+      const n = g.neighbor(cur, d);
+      if (n < 0 || seen.has(n) || ctx.b.isWater(n) || !ctx.b.isFree(n)) continue;
+      if (n === target) return true;
+      seen.add(n);
+      queue.push(n);
+    }
+  }
+  return false;
 }
 
 export function placeStartingHero(ctx: ContentContext, castle: CastleSite, colorIndex: number, raceIndex = -1): PlacedObject | null {
@@ -394,19 +433,12 @@ const KEEPER_STRENGTH = 6000;
 // A monster on each connection's gate: stronger between neutral zones deeper in the map.
 export function guardGates(ctx: ContentContext): void {
   const g = ctx.grid;
-  for (const c of ctx.layout.connections) {
-    const za = ctx.layout.zones[c.a] as Zone;
-    const zb = ctx.layout.zones[c.b] as Zone;
-    // Guard on the side of the zone farther from the starts.
-    const [zone, gate] = c.keeper !== undefined ? (c.keeper === za.id ? [za, c.gateA] : [zb, c.gateB]) : za.distance >= zb.distance ? [za, c.gateA] : [zb, c.gateB];
-    const value = 3500 + 5000 * Math.max(za.distance, zb.distance);
-    const strength = guardStrength(value, zone.distance, ctx.opts.difficulty) * (za.kind === 'start' || zb.kind === 'start' ? 0.8 : 1.2);
-    // The single way into the walled-in team: one huge stack, on the walled side of the gate.
-    const choice = c.keeper !== undefined ? chooseGuard(ctx.rng, KEEPER_STRENGTH * DIFFICULTY_FACTOR[ctx.opts.difficulty], 10) : chooseGuard(ctx.rng, strength);
-    // Use the gate tile or the nearest free tile on the corridor.
-    const spots = [gate, ...g.around(gate, 2).sort((p, q) => g.euclid(p, gate) - g.euclid(q, gate) || p - q)];
+  const seal = sealInfo(ctx);
+  const place = (choice: ReturnType<typeof chooseGuard>, spots: readonly number[], keeper = false): boolean => {
     for (const s of spots) {
       if (ctx.b.isWater(s) || !ctx.usable(s)) continue;
+      // Other guards never stand inside a walled zone; the keeper only on its gate or on the road behind it.
+      if (seal.zones.has(ctx.layout.zoneOf[s] as number) && !seal.keeperGates.has(s) && !(keeper && ctx.b.reserved[s] === Reserve.ROAD)) continue;
       const placed = ctx.b.place(ObjectGroup.MONSTERS, monsterObjectIndex(choice.monster.id), g.x(s), g.y(s), {
         allowReserved: [Reserve.ROAD, Reserve.KEEP_CLEAR, Reserve.ACCESS],
         tag: 'gate-guard',
@@ -414,10 +446,94 @@ export function guardGates(ctx: ContentContext): void {
       if (!placed) continue;
       const meta = ctx.b.map.monsterMetadata.get(placed.uid);
       if (meta) meta.count = choice.count;
-      ctx.record({ uid: placed.uid, zone: zone.id, kind: 'guard', value: 0, tile: s, guardOf: 0, strength: choice.strength });
-      break;
+      ctx.record({ uid: placed.uid, zone: (ctx.layout.zones[ctx.layout.zoneOf[s] as number] as Zone).id, kind: 'guard', value: 0, tile: s, guardOf: 0, strength: choice.strength });
+      return true;
+    }
+    return false;
+  };
+  for (const c of ctx.layout.connections) {
+    const za = ctx.layout.zones[c.a] as Zone;
+    const zb = ctx.layout.zones[c.b] as Zone;
+    if (c.keeper !== undefined) {
+      // The single way into the walled-in team: one huge stack standing on the road on the walled side of the
+      // gate, so the fight cannot be walked around.
+      const gate = c.keeper === c.a ? c.gateA : c.gateB;
+      const inward = g
+        .around(gate)
+        .filter((t) => ctx.layout.zoneOf[t] === c.keeper && ctx.b.reserved[t] === Reserve.ROAD && ctx.b.isFree(t) && !ctx.b.isWater(t))
+        .sort((p, q) => g.euclid(p, gate) - g.euclid(q, gate) || p - q);
+      const choice = chooseGuard(ctx.rng, KEEPER_STRENGTH * DIFFICULTY_FACTOR[ctx.opts.difficulty], 10);
+      if (!place(choice, [gate, ...inward], true)) throw new GenerationError(`No room for the keeper of the walled team zone ${c.keeper}`);
+      continue;
+    }
+    // Guard on the side of the zone farther from the starts.
+    const [zone, gate] = za.distance >= zb.distance ? [za, c.gateA] : [zb, c.gateB];
+    const value = 3500 + 5000 * Math.max(za.distance, zb.distance);
+    const strength = guardStrength(value, zone.distance, ctx.opts.difficulty) * (za.kind === 'start' || zb.kind === 'start' ? 0.8 : 1.2);
+    const choice = chooseGuard(ctx.rng, strength);
+    // Use the gate tile or the nearest free tile on the corridor.
+    const spots = [gate, ...g.around(gate, 2).sort((p, q) => g.euclid(p, gate) - g.euclid(q, gate) || p - q)];
+    place(choice, spots);
+  }
+}
+
+// Outside tiles that a hero could reach where the wall around the walled team is only one tile thick: an enterable
+// outside tile within two steps of an enterable walled tile, with neither tile guarded by a monster yet. The keeper
+// gates are the intended crossing and do not count.
+export function thinWallSpots(ctx: ContentContext): number[] {
+  const seal = sealInfo(ctx);
+  if (seal.zones.size === 0) return [];
+  const model = new MovementModel(ctx.b.map);
+  const g = model.grid;
+  const guarded = guardedTiles(model);
+  const walled = (t: number) => seal.zones.has(ctx.layout.zoneOf[t] as number);
+  const enterable = (t: number) => !model.water[t] && model.passability[t] !== 0;
+  const spots = new Set<number>();
+  for (const zid of seal.zones) {
+    for (const t of (ctx.layout.zones[zid] as Zone).tiles) {
+      if (!enterable(t) || guarded[t] || seal.keeperGates.has(t)) continue;
+      for (const n of g.around(t, 2)) {
+        if (!walled(n) && enterable(n) && !guarded[n] && model.actionAt[n] === -1) spots.add(n);
+      }
     }
   }
+  return [...spots].sort((a, b) => a - b);
+}
+
+// Backs the wall of the walled-in team with monsters as strong as its keeper wherever the wall is thin, so even a
+// gap the movement model misses (or a hero that slips through a corner) runs into a fight no weaker than the gate.
+// Each guard covers its own tile and its neighbors (zone of control); picks greedily the spot covering the most.
+export function guardThinWalls(ctx: ContentContext): number {
+  const g = ctx.grid;
+  const seal = sealInfo(ctx);
+  let placedCount = 0;
+  for (let round = 0; round < 64; ++round) {
+    const spots = thinWallSpots(ctx);
+    if (spots.length === 0) break;
+    const open = new Set(spots);
+    const cover = (t: number) => (open.has(t) ? 1 : 0) + g.around(t).filter((n) => open.has(n)).length;
+    // The spot itself, or an outside neighbor whose zone of control still covers it.
+    const pool = new Set<number>();
+    for (const s of spots) for (const t of [s, ...g.around(s)]) if (!seal.zones.has(ctx.layout.zoneOf[t] as number) && !ctx.b.isWater(t)) pool.add(t);
+    const candidates = [...pool].filter((t) => ctx.b.isFree(t) && cover(t) > 0).sort((a, b) => cover(b) - cover(a) || a - b);
+    const choice = chooseGuard(ctx.rng, KEEPER_STRENGTH * DIFFICULTY_FACTOR[ctx.opts.difficulty], 10);
+    let placed = false;
+    for (const s of candidates) {
+      const p = ctx.b.place(ObjectGroup.MONSTERS, monsterObjectIndex(choice.monster.id), g.x(s), g.y(s), {
+        allowReserved: [Reserve.ROAD, Reserve.KEEP_CLEAR, Reserve.ACCESS],
+        tag: 'wall-guard',
+      });
+      if (!p) continue;
+      const meta = ctx.b.map.monsterMetadata.get(p.uid);
+      if (meta) meta.count = choice.count;
+      ctx.record({ uid: p.uid, zone: (ctx.layout.zones[ctx.layout.zoneOf[s] as number] as Zone).id, kind: 'guard', value: 0, tile: s, guardOf: 0, strength: choice.strength });
+      placed = true;
+      ++placedCount;
+      break;
+    }
+    if (!placed) break;
+  }
+  return placedCount;
 }
 
 // --- Boats ---

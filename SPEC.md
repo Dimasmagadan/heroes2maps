@@ -111,6 +111,9 @@ All steps are implemented. Summary of what exists and what was learned:
 - Step 7: presets, themed names/texts, expansion content behind `--expansion`, README. Not done: `.mp2` export,
   web UI, cp1251 texts (all optional).
 - Type checking: `typescript` and `@types/node` are installed as dev dependencies; `npm run typecheck` passes.
+- Follow-up (2026-10-03): `--teams` (commit 0c68307), then the review fixes from "Review fixes" at the end of this
+  document: two-side alliance victory (type 4), a guaranteed wall seal with `keeper`-tagged walls, zone-aware roads
+  and corridors, dry shores around walled zones, and a seal check in the generator, tests and sweep.
 
 Still manual: playing a generated map in fheroes2 (visual check, AI turns). See step 6 checklist.
 
@@ -262,3 +265,84 @@ fixtures/          sample .fh2m maps (GPL, from fheroes2)
 - Maps for all four sizes and every allowed player count generate in a few seconds and pass the validator across the seed sweep.
 - Generated map statistics (object density, resources per player, monster value distribution) fall within the range observed in the fixture maps.
 - Tests cover the codec, object table, terrain, placement and validation.
+
+## Review fixes: teams and zone sealing (2026-10-03)
+
+Review of `--teams` (commit 0c68307) found that the feature does not work as intended in the game and that its
+central design element — the walled-in team — is not actually sealed.
+
+Findings:
+
+1. **Alliances are never applied in-game.** fheroes2 reads `map.alliances` only for `VICTORY_DEFEAT_OTHER_SIDE`
+   (victory type 4) and supports exactly two sides (`assert(map.alliances.size() == 2)` + `FillUnions` in
+   `maps_fileinfo.cpp`). For every other victory condition alliances are serialized, sanitized by
+   `updateMapPlayers`, and then ignored. Our maps write three alliances with victory types 0/1/3, so the three
+   teams do not exist in gameplay. Also: `updateMapPlayers` runs on the game load path (`world_loadmap.cpp`) and
+   appends every unused available color to the **last** alliance, so under type 4 all players end up on one of
+   the two sides — three sides cannot be expressed.
+2. **The wall seal leaks on every team map.** A passability probe of 84 generated maps (72/108/144, 4–6 players,
+   all water levels) found 4–49 open walkable crossings into the walled team's zones on each. Causes: road
+   routing (`routeRoads`) is not zone-constrained and reserves border tiles as `Reserve.ROAD`, where no wall can
+   be placed; `wallZoneBorders` is best-effort and leaves free border tiles; `repairReachability` treats
+   `'border'` walls as removable and may punch a path through them.
+3. **Boats bypass the seal.** 54/84 probed maps have walled zones with a coastline; every start region gets
+   boats, and a hero can disembark on any shore tile.
+4. **The validator cannot see any of this.** Monsters are visitable in the movement model, so everything is
+   "reachable" and the sweep reports 0 failures while the design is void.
+
+### Decisions
+
+| Topic | Decision |
+|---|---|
+| Teams in-game | Two alliances: side 1 = the human, side 2 = all computers (the middle computers join the rich team's side, since unused colors are appended to the last alliance). `victoryConditionType = 4` + `allowNormalVictory = true`. The three-tier economy (poor human / standard / rich walled-in) remains as map design. |
+| `--victory` with `--teams` | Incompatible: a map has one victory condition and type 4 replaces capture-town/artifact. `validateOptions` rejects the combination. |
+| Walled zones and water | All tiles of walled team zones go into `protectedLand` (never water) instead of restricting water levels. |
+| Keeper walls and repair | Walls on walled-team borders get the tag `keeper`; `repairReachability` never removes them. |
+| Peasant field vs AI | Accepted behavior: passing AI heroes may clear the field (it is weak by design). Documented in README. |
+
+### Work items (implemented 2026-10-03)
+
+All items below are implemented. The seal lives in `src/content/seal.ts`: the border ring of the walled zones is
+defined by 8-adjacency (diagonal corners leak too), `checkZoneSeal` runs over `ContentContext` + `MovementModel` in
+`generateAttempt` (before `finishMetadata`), in the teams test and in the sweep. Corridors inside walled zones keep
+off the ring, corridor reservations never land on the ring, and `dryWalledShores` converts water that the terrain
+transition fallback left next to the wall back to beach (the fallback replaces a corner tile's ground with a
+neighboring one). `repairReachability` never removes `keeper`-tagged objects; the keeper stands on the road on the
+walled side of its gate or the attempt fails.
+
+1. **Seal check in the generator (P0).** Not in `validateMap` (it works on the encoded map without layout
+   knowledge): add a check over `ContentContext` + `MovementModel` — no orthogonally adjacent enterable tile pair
+   with one tile in a walled zone and one outside, except the keeper gate pairs. Run it in `generateAttempt`
+   (before `finishMetadata`), in the teams test, and in the sweep. Land it first: it turns the invisible failure
+   into visible sweep failures that items 2–5 then eliminate.
+2. **Roads (P0).** `routeRoads`: a road path must not cross a walled-team border except through the keeper gate
+   (zone-aware `passable` for `link`, the way the corridor legs in `landscape.ts` are already zone-scoped). After
+   routing, assert that no `Reserve.ROAD` tile pair crosses a walled border.
+3. **Guaranteed walls (P0).** `wallZoneBorders`: after the existing passes, fill every still-free tile on a
+   walled-team border with a 1-tile obstacle (verify the object table has one for every ground), tagged `keeper`.
+   If a tile still cannot be filled, throw `GenerationError`.
+4. **Repair (P0).** Exclude the tag `keeper` from `REMOVABLE_TAGS`.
+5. **Water (P0).** `generateLandscape`: with `teams`, add every tile of team-3 start zones to `protectedLand`.
+6. **Two-side alliances (P1).** `finishMetadata`: `alliances = [teamMask(1), teamMask(2) | teamMask(3)]`,
+   `victoryConditionType = 4`, `allowNormalVictory = true`. Check the fheroes2 source for what
+   `VICTORY_DEFEAT_OTHER_SIDE` expects from `victoryConditionMetadata` and `isVictoryConditionApplicableForAI`,
+   and set both accordingly. `validateOptions`: reject `teams` with `victory !== 'normal'`.
+7. **Layout errors (P2).** `connectZones`: a walled group with no outgoing edge throws a labeled
+   `GenerationError` instead of silently continuing and failing validation later.
+8. **Tests and sweep (P0).** Teams test: alliances of length 2, victory type 4, the seal check, no water
+   adjacency of walled zones, keeper guard records. Acceptance: 0 seal leaks and under 5% retries across a
+   100-seed sweep (baseline: 18/1500 ≈ 1.2%).
+9. **Docs (P2).** README: rewrite the Teams section (two sides, what actually changes in-game, keeper strength
+   scales with difficulty — 3600 easy / 6000 normal / 11400 expert). This section covers SPEC.
+
+### Verification
+
+- `node src/cli.ts check` (fh2check, debug asserts) on teams maps: with victory type 4 the loader asserts
+  `alliances.size() == 2`, so the game-code checker becomes load-bearing for this feature — run it on every teams
+  seed in the sweep.
+- Manual in-game checklist: the map list shows the alliance victory condition; computers do not attack each other
+  or the walled team; team-3 income events arrive on day 1 and weekly; the keeper stands on the walled side of its
+  gate; no path or boat route enters the walled team without passing the keeper; the peasant field and its rumor
+  exist.
+- Watch item: fheroes2 may lift the two-alliance limit ("As of now only 2 alliances are supported" in
+  `maps_fileinfo.cpp`); revisit the three-team mapping when it does.

@@ -41,6 +41,12 @@ export interface GeneratorOptions {
   // Three teams (see playerTeams): the human alone, a middle team of computers, and a rich, walled-in team behind one
   // powerful guard. Needs at least 4 players.
   teams: boolean;
+  // Mid-game twist: on day 21 the computers get a windfall (the Pale Tide); a guarded crypt far from the human's start
+  // holds the counter (experience, resources, an artifact).
+  twist: boolean;
+  // Scenario: Koschei the Deathless against the heroes of the Russian tales (see content/tale). Russian texts, prisons with
+  // friendly heroes, a place of power. Implies the necromancer race, the expansion and the twist.
+  tale: boolean;
   name?: string;
 }
 
@@ -54,10 +60,13 @@ export const DEFAULT_OPTIONS: Omit<GeneratorOptions, 'seed'> = {
   race: 'random',
   expansion: false,
   teams: false,
+  twist: false,
+  tale: false,
 };
 
 export function resolveOptions(partial: Partial<GeneratorOptions> & { seed: number }): GeneratorOptions {
   const options: GeneratorOptions = { ...DEFAULT_OPTIONS, ...partial };
+  if (options.tale) Object.assign(options, { race: 'necromancer', expansion: true, twist: true });
   validateOptions(options);
   return options;
 }
@@ -78,12 +87,14 @@ export function validateOptions(o: GeneratorOptions): void {
   if (!Number.isInteger(o.players) || o.players < min || o.players > max) {
     throw new Error(`Invalid player count ${o.players} for size ${o.size}: expected ${min}-${max} (human included)`);
   }
+  if (o.tale && o.size < 72) throw new Error('The tale needs room for its prisons and the place of power: use size 72 or more');
   if (o.teams && o.players < 4) throw new Error(`Teams need at least 4 players (got ${o.players})`);
   if (o.teams && o.preset === 'islands') throw new Error('Teams are not available on the islands preset');
+  if (o.teams && o.victory !== 'normal') throw new Error('Teams define their own victory condition (defeat the other side); do not combine --teams with --victory');
   if (!WATER_LEVELS.includes(o.water)) throw new Error(`Invalid water level ${o.water}: expected one of ${WATER_LEVELS.join(', ')}`);
   if (!DIFFICULTIES.includes(o.difficulty)) throw new Error(`Invalid difficulty ${o.difficulty}: expected one of ${DIFFICULTIES.join(', ')}`);
   if (!PRESETS.includes(o.preset)) throw new Error(`Invalid preset ${o.preset}: expected one of ${PRESETS.join(', ')}`);
   if (!VICTORY_CONDITIONS.includes(o.victory)) throw new Error(`Invalid victory condition ${o.victory}: expected one of ${VICTORY_CONDITIONS.join(', ')}`);
   if (!RACES.includes(o.race)) throw new Error(`Invalid race ${o.race}: expected one of ${RACES.join(', ')}`);
-  if (o.name !== undefined && !/^[\x20-\x7e]*$/.test(o.name)) throw new Error('Map name must be printable ASCII');
+  if (o.name !== undefined && !o.tale && !/^[\x20-\x7e]*$/.test(o.name)) throw new Error('Map name must be printable ASCII');
 }

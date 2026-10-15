@@ -37,6 +37,12 @@ export const PEASANT_RUMORS: readonly string[] = [
   'Beyond the nearest borders there is a field so full of peasants that the ground cannot be seen.',
 ];
 
+// Hint for the twist option.
+export const TWIST_RUMORS: readonly string[] = [
+  'The dead sleep uneasily in a crypt far from the roads. Whoever wakes the lich king will not face the third week alone.',
+  'Old graves speak of a pale tide that comes on the third week, and of a crypt that can turn it.',
+];
+
 export const SIGN_MESSAGES: readonly string[] = [
   'Welcome, traveler. Guard your mines well.',
   'Beyond the pass lie riches and danger in equal measure.',

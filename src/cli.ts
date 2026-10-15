@@ -31,7 +31,9 @@ const USAGE = `Usage:
       --race <r>            human player's faction: ${RACES.join(', ')} (default random); necromancer also tunes the map
       --victory <v>         ${VICTORY_CONDITIONS.join(', ')} (default normal)
       --expansion           include The Price of Loyalty objects and artifacts
-      --teams               human alone, computers split into a middle team and a rich team walled in behind one huge guard (4+ players)
+      --teams               two alliances in-game (human vs all computers), rich walled-in computer team behind one huge guard (4+ players)
+      --twist               mid-game twist: computers get a windfall on day 21, a guarded crypt holds the human's counter
+      --tale                scenario: Koschei the Deathless vs the heroes of Russian tales (Russian texts; implies necromancer, expansion, twist)
       --name <text>         map name (default: generated)
       --out <file>          output .fh2m (default out/random_<seed>.fh2m)
       --install             also copy the map into the fheroes2 maps directory
@@ -114,6 +116,8 @@ function main(argv: string[]): number {
       race: { type: 'string' },
       expansion: { type: 'boolean' },
       teams: { type: 'boolean' },
+      twist: { type: 'boolean' },
+      tale: { type: 'boolean' },
       name: { type: 'string' },
       out: { type: 'string' },
       install: { type: 'boolean' },
@@ -144,6 +148,8 @@ function main(argv: string[]): number {
       if (values.victory) partial.victory = values.victory as GeneratorOptions['victory'];
       if (values.expansion) partial.expansion = true;
       if (values.teams) partial.teams = true;
+      if (values.twist) partial.twist = true;
+      if (values.tale) partial.tale = true;
       if (values.name !== undefined) partial.name = values.name;
 
       const started = Date.now();
@@ -151,7 +157,7 @@ function main(argv: string[]): number {
       const out = values.out ?? join('out', `random_${seed}.fh2m`);
       writeFile(out, encodeMap(result.map));
       const o = result.options;
-      console.log(`Generated "${result.map.name}" (${o.size}x${o.size}, ${o.players} players, ${o.water} water, ${o.difficulty}, ${o.preset}, seed ${o.seed}) in ${Date.now() - started} ms`);
+      console.log(`Generated "${o.tale ? new TextDecoder('windows-1251').decode(Buffer.from(result.map.name, 'latin1')) : result.map.name}" (${o.size}x${o.size}, ${o.players} players, ${o.water} water, ${o.difficulty}, ${o.preset}, seed ${o.seed}) in ${Date.now() - started} ms`);
       console.log(`Wrote ${out}`);
       if (values.preview) {
         writeFile(values.preview, renderPng(result.map, { zoneOf: result.layout.zoneOf }));

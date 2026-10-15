@@ -6,7 +6,8 @@
 // irregular Voronoi cells. Connections: a minimum spanning tree over adjacent zones (start-start edges are
 // penalized so players meet through neutral land) plus some extra edges for loops.
 
-import { Grid, ORTHOGONAL_DIRECTIONS } from '../grid.ts';
+import { GenerationError } from '../errors.ts';
+import { Grid, NEIGHBOR_DIRECTIONS, ORTHOGONAL_DIRECTIONS } from '../grid.ts';
 import { playerTeams, type GeneratorOptions } from '../options.ts';
 import type { Rng } from '../rng.ts';
 import { Ground } from '../terrain/ground.ts';
@@ -33,6 +34,33 @@ export interface Connection {
   gateB: number; // adjacent border tile on zone b's side
   // The only way into a walled-in team (teams option): guarded by one huge monster.
   keeper?: number; // id of the walled-in zone
+}
+
+// Zone ids of the walled-in team (teams option): the start zones of team 3.
+export function walledZoneIds(zones: readonly Zone[], teams: readonly number[] | null): Set<number> {
+  const ids = new Set<number>();
+  if (teams) for (const z of zones) if (z.kind === 'start' && teams[z.player] === 3) ids.add(z.id);
+  return ids;
+}
+
+// Tiles of the walled zones that touch the rest of the map (orthogonally or diagonally; water tiles belong to
+// other zones). Nothing enterable may remain here except the keeper gates, or a hero can slip in without
+// fighting the keeper — including over a diagonal corner, so the border is defined by 8-adjacency.
+export function walledBorderTiles(grid: Grid, zoneOf: Int16Array, zones: readonly Zone[], walled: Set<number>): Set<number> {
+  const tiles = new Set<number>();
+  if (walled.size === 0) return tiles;
+  for (const id of walled) {
+    for (const t of (zones[id] as Zone).tiles) {
+      for (const d of NEIGHBOR_DIRECTIONS) {
+        const n = grid.neighbor(t, d);
+        if (n >= 0 && !walled.has(zoneOf[n] as number)) {
+          tiles.add(t);
+          break;
+        }
+      }
+    }
+  }
+  return tiles;
 }
 
 export interface Layout {
@@ -259,6 +287,40 @@ function assignGrounds(zones: Zone[], opts: GeneratorOptions, rng: Rng): void {
 function connectZones(grid: Grid, zoneOf: Int16Array, zones: Zone[], rng: Rng, teams: readonly number[] | null): Connection[] {
   // The walled-in team (3) is reachable through exactly one connection per group of adjacent team zones.
   const walled = (z: Zone) => teams !== null && z.kind === 'start' && teams[z.player] === 3;
+  // Sealed interior of the walled group: tiles the border wall will not cover. The keeper gate must open into
+  // this interior, or the wall closes around the gate and the team's zones stay unreachable behind it.
+  let opensInside: ((t: number) => boolean) | null = null;
+  if (teams !== null) {
+    const walledIds = new Set(zones.filter((z) => walled(z)).map((z) => z.id));
+    if (walledIds.size > 0) {
+      const ring = walledBorderTiles(grid, zoneOf, zones, walledIds);
+      const seedTiles = zones.filter((z) => walled(z)).map((z) => z.seed);
+      const comp = new Int32Array(grid.size).fill(-1);
+      let comps = 0;
+      for (const s of seedTiles) {
+        if ((comp[s] as number) >= 0) continue;
+        const queue = [s];
+        comp[s] = comps;
+        for (let h = 0; h < queue.length; ++h) {
+          const cur = queue[h] as number;
+          for (const d of NEIGHBOR_DIRECTIONS) {
+            const n = grid.neighbor(cur, d);
+            if (n < 0 || (comp[n] as number) >= 0 || !walledIds.has(zoneOf[n] as number)) continue;
+            if (ring.has(n) && !seedTiles.includes(n)) continue;
+            comp[n] = comps;
+            queue.push(n);
+          }
+        }
+        ++comps;
+      }
+      const allIn = seedTiles.every((s) => comp[s] === comp[seedTiles[0] as number]) ? (comp[seedTiles[0] as number] as number) : null;
+      const interior = new Set<number>();
+      if (allIn !== null) for (let t = 0; t < grid.size; ++t) if (comp[t] === allIn) interior.add(t);
+      // The gate must have an orthogonally adjacent open tile inside: a diagonal step into the gate is blocked
+      // by fheroes2's diagonal rule as soon as the wall stands beside it, and the team could not walk out.
+      opensInside = (t: number) => ORTHOGONAL_DIRECTIONS.some((d) => interior.has(grid.neighbor(t, d) as number));
+    }
+  }
   interface Edge {
     a: number;
     b: number;
@@ -304,10 +366,21 @@ function connectZones(grid: Grid, zoneOf: Int16Array, zones: Zone[], rng: Rng, t
     for (const z of zones.filter(walled)) {
       const root = groupOf(z.id);
       if (done.has(root)) continue;
-      // Shortest edge from the group to a neutral or center zone (any other zone if there is none).
+      // Shortest edge from the group to a neutral or center zone (any other zone if there is none), preferring
+      // edges whose gate can open into the sealed interior of the group.
       const out = edges.filter((e) => walled(zones[e.a] as Zone) !== walled(zones[e.b] as Zone) && groupOf(inside(e)) === root);
-      const best = out.find((e) => (zones[inside(e) === e.a ? e.b : e.a] as Zone).kind !== 'start') ?? out[0];
-      if (!best) continue;
+      const opens = (e: Edge) => {
+        if (opensInside === null) return true;
+        const walledSide = inside(e);
+        const gate = pickGate(grid, zoneOf, zones[e.a] as Zone, zones[e.b] as Zone, null, (pair) => opensInside(zoneOf[pair[0]] === walledSide ? pair[0] : pair[1]));
+        return gate !== null && opensInside(zoneOf[gate[0]] === walledSide ? gate[0] : gate[1]);
+      };
+      const best =
+        out.find((e) => opens(e) && (zones[inside(e) === e.a ? e.b : e.a] as Zone).kind !== 'start') ??
+        out.find((e) => opens(e)) ??
+        out.find((e) => (zones[inside(e) === e.a ? e.b : e.a] as Zone).kind !== 'start') ??
+        out[0];
+      if (!best) throw new GenerationError(`Walled team zone ${z.id} (player ${z.player}) has no connection to the rest of the map`);
       done.add(root);
       parent[find(best.a)] = find(best.b);
       chosen.push(best);
@@ -338,18 +411,33 @@ function connectZones(grid: Grid, zoneOf: Int16Array, zones: Zone[], rng: Rng, t
 
   const connections: Connection[] = [];
   for (const e of chosen) {
-    const gate = pickGate(grid, zoneOf, zones[e.a] as Zone, zones[e.b] as Zone);
-    if (gate) connections.push({ a: e.a, b: e.b, gateA: gate[0], gateB: gate[1], ...(keepers.has(e) ? { keeper: keepers.get(e) as number } : {}) });
+    const keeperOf = keepers.get(e);
+    const bothWalled = teams !== null && walled(zones[e.a] as Zone) && walled(zones[e.b] as Zone);
+    // Gates between two walled zones must stay open for the team itself while the seal closes everything around
+    // them, so they may not touch the rest of the map; keeper gates and internal gates must open into the
+    // sealed interior, or the wall closes around the gate and the team is unreachable behind it.
+    const awayFrom = bothWalled ? new Set(zones.filter((z) => !walled(z)).map((z) => z.id)) : null;
+    const prefer =
+      opensInside === null || (!bothWalled && keeperOf === undefined)
+        ? null
+        : (pair: [number, number]) => (bothWalled ? opensInside(pair[0]) && opensInside(pair[1]) : opensInside(zoneOf[pair[0]] === keeperOf ? pair[0] : pair[1]));
+    const gate = pickGate(grid, zoneOf, zones[e.a] as Zone, zones[e.b] as Zone, awayFrom, prefer);
+    if (gate) connections.push({ a: e.a, b: e.b, gateA: gate[0], gateB: gate[1], ...(keeperOf !== undefined ? { keeper: keeperOf } : {}) });
   }
   return connections;
 }
 
-// Border tile pair (a side, b side) closest to the middle of the two seeds, away from the map edge.
-function pickGate(grid: Grid, zoneOf: Int16Array, a: Zone, b: Zone): [number, number] | null {
+// Border tile pair (a side, b side) closest to the middle of the two seeds, away from the map edge. With
+// `awayFrom`, pairs with an 8-adjacent tile of one of those zones are only used as a last resort. `prefer`
+// pairs (e.g. gates that open into the walled group's interior) win over all others.
+function pickGate(grid: Grid, zoneOf: Int16Array, a: Zone, b: Zone, awayFrom: Set<number> | null = null, prefer: ((pair: [number, number]) => boolean) | null = null): [number, number] | null {
   const mx = (grid.x(a.seed) + grid.x(b.seed)) / 2;
   const my = (grid.y(a.seed) + grid.y(b.seed)) / 2;
   let best: [number, number] | null = null;
   let bestScore = Infinity;
+  let bestRank = Infinity;
+  let fallback: [number, number] | null = null;
+  let fallbackScore = Infinity;
   for (const t of a.tiles) {
     const x = grid.x(t);
     const y = grid.y(t);
@@ -358,11 +446,18 @@ function pickGate(grid: Grid, zoneOf: Int16Array, a: Zone, b: Zone): [number, nu
       const n = grid.neighbor(t, d);
       if (n < 0 || zoneOf[n] !== b.id) continue;
       const score = Math.hypot(x - mx, y - my);
-      if (score < bestScore) {
+      const away = awayFrom !== null && grid.around(t).some((s) => awayFrom.has(zoneOf[s] as number)) && grid.around(n).some((s) => awayFrom.has(zoneOf[s] as number));
+      const rank = (prefer !== null && prefer([t, n]) ? 0 : 1) * 2 + (away ? 1 : 0);
+      if (rank < bestRank || (rank === bestRank && score < bestScore)) {
+        bestRank = rank;
         bestScore = score;
         best = [t, n];
       }
+      if (score < fallbackScore) {
+        fallbackScore = score;
+        fallback = [t, n];
+      }
     }
   }
-  return best;
+  return best ?? fallback;
 }

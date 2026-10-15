@@ -11,6 +11,7 @@ import { parseArgs } from 'node:util';
 import { Worker, isMainThread, parentPort, workerData } from 'node:worker_threads';
 import { compareWithGame, findChecker, runGameCheck } from '../src/fh2check.ts';
 import { generate } from '../src/generate.ts';
+import { checkZoneSeal } from '../src/content/seal.ts';
 import { DIFFICULTIES, MAP_SIZES, PLAYER_LIMITS, PRESETS, RACES, VICTORY_CONDITIONS, WATER_LEVELS, type GeneratorOptions } from '../src/options.ts';
 import { findInvalidRoads } from '../src/terrain/roads.ts';
 import { findInvalidTransitions } from '../src/terrain/transitions.ts';
@@ -35,6 +36,7 @@ function jobs(seeds: number): Job[] {
       for (let seed = 1; seed <= seeds; ++seed) {
         const k = seed + players;
         const preset = PRESETS[(k >> 1) % PRESETS.length] as GeneratorOptions['preset'];
+        const teams = players >= 4 && preset !== 'islands' && seed % 3 === 0;
         list.push({
           options: {
             seed: seed * 1000 + size + players,
@@ -43,10 +45,13 @@ function jobs(seeds: number): Job[] {
             water: WATER_LEVELS[k % WATER_LEVELS.length] as GeneratorOptions['water'],
             preset,
             difficulty: DIFFICULTIES[(k >> 2) % DIFFICULTIES.length] as GeneratorOptions['difficulty'],
-            victory: VICTORY_CONDITIONS[seed % VICTORY_CONDITIONS.length] as GeneratorOptions['victory'],
+            // Teams maps carry their own victory condition (defeat the other side).
+            victory: teams ? 'normal' : (VICTORY_CONDITIONS[seed % VICTORY_CONDITIONS.length] as GeneratorOptions['victory']),
             race: RACES[(seed + size) % RACES.length] as GeneratorOptions['race'],
             expansion: seed % 5 === 0,
-            teams: players >= 4 && preset !== 'islands' && seed % 3 === 0,
+            teams,
+            twist: seed % 4 === 0,
+            tale: false,
           },
         });
       }
@@ -65,6 +70,10 @@ function runJob(job: Job, check: boolean): JobResult {
     if (report.starts.length !== job.options.players) errors.push(`${report.starts.length} players instead of ${job.options.players}`);
     if (findInvalidTransitions(result.map).length > 0) errors.push('invalid terrain transitions');
     if (findInvalidRoads(result.map).length > 0) errors.push('invalid roads');
+    if (job.options.teams) {
+      const leaks = checkZoneSeal(result.context);
+      if (leaks.length > 0) errors.push(`seal: ${leaks.slice(0, 3).join('; ')}`);
+    }
     const checker = check ? findChecker() : null;
     if (checker) {
       const game = runGameCheck(result.map, checker);

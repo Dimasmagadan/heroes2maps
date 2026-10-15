@@ -1,13 +1,12 @@
-// Reachability repair: when the validator finds unreachable objects, clears the cheapest path through
-// decoration obstacles (removing them), and as a last resort removes the unreachable object and its guard.
+// Reachability repair: when the validator finds unreachable objects, clears the cheapest path through removable
+// obstacles (decoration first, content as a last resort; the walled team's `keeper` seal and gate keepers are
+// never touched), and as a last resort removes the unreachable object and its guard.
 
 import { MinHeap } from '../terrain/landscape.ts';
 import { ORTHOGONAL_DIRECTIONS } from '../grid.ts';
 import { ObjectGroup } from '../fh2m/types.ts';
-import { MovementModel, playerStarts, reach, validateMap, type MapObjectRef, type ValidationReport } from '../validate.ts';
+import { MovementModel, isRemovable, playerStarts, reach, validateMap, type MapObjectRef, type ValidationReport } from '../validate.ts';
 import type { ContentContext } from './content.ts';
-
-const REMOVABLE_TAGS = new Set(['decoration', 'border']);
 
 export interface RepairResult {
   report: ValidationReport;
@@ -36,6 +35,8 @@ export function repairReachability(ctx: ContentContext, rounds = 12): RepairResu
           changed = true;
         } else if (round >= 2) {
           if (o.group === ObjectGroup.KINGDOM_TOWNS || o.group === ObjectGroup.KINGDOM_HEROES) continue; // never drop players or towns
+          const placed = ctx.b.objects.get(o.uid);
+          if (placed?.tag === 'gate-guard') continue; // the keeper of the walled team stays, whatever it guards
           removeWithGuard(ctx, o.uid);
           ++removedObjects;
           changed = true;
@@ -48,16 +49,37 @@ export function repairReachability(ctx: ContentContext, rounds = 12): RepairResu
   return { report, removedDecorations, removedObjects };
 }
 
-// Dijkstra from reached land to the object, where decoration tiles cost extra; removes decorations on the path.
-// Only orthogonal steps are used, so the cleared path does not depend on fheroes2's diagonal-move rule.
+// Dijkstra from reached land to the object. Tile costs mirror the movement model: removable objects (pickups,
+// monsters, heroes, boats) are visited and do not block; blocked tiles are cleared if their object is
+// expendable — decoration and border walls cheaply, game content as a last resort — and never if it is part of
+// the walled team's seal, a castle, a hero or the target itself. Only orthogonal steps are used, so the cleared
+// path does not depend on fheroes2's diagonal-move rule.
+
+// Clearing costs: decoration first, game content (chests, dwellings, power-ups) as a last resort. The map
+// economy is never carved away: mines, castles, heroes and the walled team's seal stay.
+const CLEAR_DECORATION = 10;
+const CLEAR_CONTENT = 60;
+const NEVER_CARVE = new Set<number>([ObjectGroup.ADVENTURE_MINES, ObjectGroup.KINGDOM_TOWNS, ObjectGroup.KINGDOM_HEROES]);
+
 function clearPathTo(ctx: ContentContext, model: MovementModel, reached: Uint8Array, target: MapObjectRef): number {
   const g = ctx.grid;
   const b = ctx.b;
-  const decorationAt = (t: number): number => {
+  // -1: impassable even after clearing; 1: free to walk (nothing to remove); > 1: cost of clearing the tile.
+  // The live builder state is the truth: the model is stale for tiles cleared for earlier targets this round.
+  const stepCost = (t: number): number => {
+    if (model.water[t]) return -1;
     const uid = b.occupant[t] as number;
-    if (uid === 0) return 0;
-    const placed = b.objects.get(uid);
-    return placed && placed.tag !== undefined && REMOVABLE_TAGS.has(placed.tag) ? uid : -1;
+    if (uid === 0) return 1;
+    const a = model.actionAt[t] as number;
+    if (a >= 0) {
+      const obj = model.objects[a] as MapObjectRef;
+      if (isRemovable(obj.info)) return 1; // the hero visits it and moves on
+      return NEVER_CARVE.has(obj.group) ? -1 : CLEAR_CONTENT; // the hero would have to stop here
+    }
+    const placed = b.objects.get(uid) ?? null;
+    if (!placed) return -1;
+    if (placed.uid === target.uid || placed.tag === 'keeper' || NEVER_CARVE.has(placed.group)) return -1;
+    return placed.tag === 'decoration' || placed.tag === 'border' ? CLEAR_DECORATION : CLEAR_CONTENT;
   };
   const goals = new Set(target.info.actionCells.map((a) => g.index(g.x(target.tile) + a.dx, g.y(target.tile) + a.dy)));
   const dist = new Float64Array(g.size).fill(Infinity);
@@ -79,26 +101,23 @@ function clearPathTo(ctx: ContentContext, model: MovementModel, reached: Uint8Ar
     }
     for (const dir of ORTHOGONAL_DIRECTIONS) {
       const n = g.neighbor(cur, dir);
-      if (n < 0 || model.water[n]) continue;
-      let step = 1;
-      if (!goals.has(n)) {
-        const deco = decorationAt(n);
-        if (deco < 0) continue;
-        if (deco > 0) step += 10;
-        else if ((model.actionAt[n] as number) >= 0) continue;
-      }
-      if (d + step < (dist[n] as number)) {
-        dist[n] = d + step;
+      if (n < 0) continue;
+      const cost = goals.has(n) ? 1 : stepCost(n);
+      if (cost < 0) continue;
+      const nd = d + cost;
+      if (nd < (dist[n] as number)) {
+        dist[n] = nd;
         prev[n] = cur;
-        heap.push(n, d + step);
+        heap.push(n, nd);
       }
     }
   }
   if (found < 0) return 0;
   const toRemove = new Set<number>();
   for (let t = found; t !== -1; t = prev[t] as number) {
-    const deco = decorationAt(t);
-    if (deco > 0) toRemove.add(deco);
+    if (goals.has(t) || stepCost(t) <= 1) continue;
+    const uid = b.occupant[t] as number;
+    if (uid !== 0) toRemove.add(uid);
   }
   for (const uid of toRemove) b.remove(uid);
   return toRemove.size;
