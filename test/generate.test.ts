@@ -74,12 +74,12 @@ describe('generator', () => {
   });
 
   for (const options of [
-    { seed: 11, size: 36, players: 2, water: 'low' },
-    { seed: 12, size: 72, players: 4, water: 'medium' },
-    { seed: 13, size: 108, players: 5, water: 'low', preset: 'lakes' },
-    { seed: 14, size: 144, players: 6, water: 'medium' },
-    { seed: 15, size: 108, players: 3, water: 'high', preset: 'islands' },
-    { seed: 16, size: 72, players: 3, water: 'none', preset: 'wasteland' },
+    { seed: 11, size: 36, players: 2, water: 'low', template: 'ring' },
+    { seed: 12, size: 72, players: 4, water: 'medium', template: 'ring' },
+    { seed: 13, size: 108, players: 5, water: 'low', preset: 'lakes', template: 'ring' },
+    { seed: 14, size: 144, players: 6, water: 'medium', template: 'ring' },
+    { seed: 15, size: 108, players: 3, water: 'high', preset: 'islands', template: 'ring' },
+    { seed: 16, size: 72, players: 3, water: 'none', preset: 'wasteland', template: 'ring' },
   ] as const) {
     it(`generates a valid ${options.size}x${options.size} map for ${options.players} players (${options.water} water, ${'preset' in options ? options.preset : 'continent'})`, () => {
       const result = generate(options);

@@ -121,6 +121,9 @@ function generateAttempt(options: GeneratorOptions, attempt: number, debug: Debu
   // and its outside neighbors are walled now, before roads and content could take the space.
   for (const t of corridorTiles) {
     if (!seal.border.has(t) || !seal.zones.has(ctx.layout.zoneOf[t] as number)) continue;
+    // The keeper gate itself is the guarded crossing: heroes are supposed to reach it from outside
+    // (checkZoneSeal exempts it the same way); its outside neighbors carry the approach road.
+    if (seal.keeperGates.has(t)) continue;
     if (!sealFromNeighbors(ctx, seal, t, corridorTiles)) throw new GenerationError(`Cannot seal the walled team corridor at ${ctx.grid.x(t)},${ctx.grid.y(t)}`);
   }
   for (const line of landscape.corridors) {
@@ -189,7 +192,8 @@ function generateAttempt(options: GeneratorOptions, attempt: number, debug: Debu
     if (ctx.rng.chance(0.6)) placeMine(ctx, zone, ctx.rng.pick(['wood', 'ore'] as const), anchor, 2, 30);
     // Necromancer maps carry more guarded content: every fight raises more skeletons.
     const necroFactor = options.race === 'necromancer' ? 1.2 : 1;
-    const budget = ZONE_BUDGET[options.size]! * (0.7 + 1.5 * zone.distance) * (zone.kind === 'center' ? 1.4 : 1) * sizeFactor(ctx, zone) * necroFactor;
+    // The template can make a zone richer (the hub's center, the split's bridges, the inner ring of rings).
+    const budget = ZONE_BUDGET[options.size]! * (0.7 + 1.5 * zone.distance) * (zone.kind === 'center' ? 1.4 : 1) * (zone.budgetScale ?? 1) * sizeFactor(ctx, zone) * necroFactor;
     fillZone(ctx, zone, budget, anchor);
   }
 
@@ -593,7 +597,7 @@ function finishMetadata(ctx: ContentContext, options: GeneratorOptions, landscap
   map.name = options.tale ? ru(options.name ?? TALE_NAME).slice(0, 64) : (options.name ?? mapName(rng, dominant)).slice(0, 64);
   map.description =
     `Random map ${options.size}x${options.size}, ${options.players} players (1 human), ${options.water} water, ${options.difficulty}, ` +
-    `${options.preset} preset, mostly ${GROUND_NAMES[dominant]}. Seed ${options.seed}.`;
+    `${options.preset} preset, ${ctx.layout.template} layout, mostly ${GROUND_NAMES[dominant]}. Seed ${options.seed}.`;
   if (options.tale) {
     map.description = ru(TALE_DESCRIPTION);
     map.mainLanguage = RUSSIAN_LANGUAGE;

@@ -184,10 +184,28 @@ export function placeCastle(ctx: ContentContext, zone: Zone, colorIndex: number,
   const g = ctx.grid;
   const townIdx = colorIndex === NEUTRAL_COLOR_INDEX ? (isCastle ? RANDOM_CASTLE_INDEX : RANDOM_TOWN_INDEX) : raceIndex >= 0 ? raceIndex * 2 + (isCastle ? 0 : 1) : RANDOM_CASTLE_INDEX;
   const town = getObjectInfo(ObjectGroup.KINGDOM_TOWNS, townIdx);
-  const candidates = zone.tiles
-    .filter((t) => ctx.usable(t) && (ctx.borderDist[t] as number) >= 5 && g.distance(t, zone.seed) <= 8)
-    .map((t) => ({ t, score: g.euclid(t, zone.seed) + ctx.rng.next() * 1.5 }))
-    .sort((a, b) => a.score - b.score || a.t - b.t);
+  // The castle prefers a deep interior (5 tiles from the zone border, near the seed). Thin template zones
+  // (a spine cell is a long strip, small maps cut deep interiors out entirely) get progressively wider
+  // windows down to "anywhere usable in the zone" — canPlace still guarantees the footprint fits.
+  const attempts: [number, number][] = zone.tiles.length < 400
+    ? [
+        [3, 14],
+        [2, 18],
+        [1, 60],
+      ]
+    : [
+        [5, 8],
+        [3, 14],
+        [1, 60],
+      ];
+  let candidates: { t: number; score: number }[] = [];
+  for (const [minBorder, maxFromSeed] of attempts) {
+    candidates = zone.tiles
+      .filter((t) => ctx.usable(t) && (ctx.borderDist[t] as number) >= minBorder && g.distance(t, zone.seed) <= maxFromSeed)
+      .map((t) => ({ t, score: g.euclid(t, zone.seed) + ctx.rng.next() * 1.5 }))
+      .sort((a, b) => a.score - b.score || a.t - b.t);
+    if (candidates.length > 0) break;
+  }
 
   for (const { t } of candidates) {
     const x = g.x(t);

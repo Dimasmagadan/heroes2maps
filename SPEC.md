@@ -114,6 +114,8 @@ All steps are implemented. Summary of what exists and what was learned:
 - Follow-up (2026-10-03): `--teams` (commit 0c68307), then the review fixes from "Review fixes" at the end of this
   document: two-side alliance victory (type 4), a guaranteed wall seal with `keeper`-tagged walls, zone-aware roads
   and corridors, dry shores around walled zones, and a seal check in the generator, tests and sweep.
+- Follow-up (2026-10-25): `--template` (five macro layouts, see "Templates" at the end of this document) and the
+  teams seal robustness fixes from "Templates and the teams seal (2026-10-25)".
 
 Still manual: playing a generated map in fheroes2 (visual check, AI turns). See step 6 checklist.
 
@@ -346,3 +348,61 @@ walled side of its gate or the attempt fails.
   exist.
 - Watch item: fheroes2 may lift the two-alliance limit ("As of now only 2 alliances are supported" in
   `maps_fileinfo.cpp`); revisit the three-team mapping when it does.
+
+## Templates and the teams seal (2026-10-25)
+
+The generator built every map on the same macro shape (starts on a ring, a center zone, best-candidate neutral
+zones, MST + loops): seeds only jittered what the shape already was. `--template` adds five macro layouts, and
+`random` (the default) picks one per seed.
+
+| Template | Seeds | Connection policy |
+|---|---|---|
+| `ring` | As before: starts on a ring, center zone on 72+ maps, best-candidate neutral fill. | Unchanged (start-start edges penalized). |
+| `hub` | Starts on a slightly wider ring; neutral seeds rejected within 0.42·W of the center, so every start zone borders the center zone. | Edges not touching the center cost 6x; the center zone gets `budgetScale` 1.6; non-center loops are rare (0.12). |
+| `split` | Even players on one side of a random axis (x = W/2 or y = W/2), odd players on the other; no center zone. | Edges between the halves cost 8x unless they touch a bridge zone (a neutral zone with tiles on the axis whose neighbors include both halves; up to two, one per axis half, `budgetScale` 1.5). Landscape piles extra water score along the axis, so a strait crosses the map and the bridges stay dry. |
+| `spine` | A wavy chain of zones across the map; starts on evenly spaced chain positions, both ends included; no center zone. | Edge cost grows with chain distance (1 / 2.2 / 10); loops only between chain neighbors. |
+| `rings` | Starts on an outer ring (0.40·W), 2–4 inner-ring neutral zones at 0.16·W with `budgetScale` 1.8; no center zone. | Inner-inner edges cost 1, inner-outer gates 6x, extra gates into the inner ring rare (0.04). Inner zones claim more space in the Voronoi (weight 0.9) so they stay adjacent to each other. |
+
+Template annotations live on `Zone` (`group`, `order`, `tag`, `budgetScale`) and `Layout` (`template`, `bridges`,
+`splitVertical`); the rest of the pipeline (landscape, content, validation) works on any zone graph. The strict
+"statistics within fixture ranges" test is pinned to `template: 'ring'` (the fixtures are hand-made classic
+layouts); `test/template.test.ts` checks each template with loose bounds and structural asserts (hub star, split
+bridge-only crossings, spine chain order, rings gates).
+
+### Teams seal robustness
+
+Probing teams maps exposed a severe regression that had slipped in with the 2026-10-03 seal rework and was
+invisible because the sweep had not been re-run since: on 144/6 necromancer teams maps 16 of 24 arbitrary seeds
+failed all 8 attempts (mostly "Cannot seal the walled team corridor"). Root causes, all fixed:
+
+1. **Corridor side tiles spilled outside the walled zones.** A walled leg's diagonal steps rejected side tiles
+   on the border ring, but not side tiles in a *neighboring* zone right next to the ring — such a tile sits on
+   the outside of a slit and can never be walled. `legPass` now requires walled legs' diagonal side tiles to
+   stay inside the walled zones (`src/terrain/landscape.ts`).
+2. **The slit loop did not exempt keeper gates.** `generate.ts` sealed every corridor tile on the walled border,
+   including the keeper gate itself — whose outside neighbors carry the approach road by design.
+   `checkZoneSeal` exempts keeper gates; the slit loop now does the same.
+3. **Slit neighborhoods were only enforced per connection.** The re-route of the outside leg could fail (kept
+   via `?? legB`), and internal walled-walled corridors had no outside leg to re-route at all. Corridors are
+   consumed only as tile sets (water protection, road reservations — `routeRoads` routes independently), so
+   `generateLandscape` now drops, from any corridor line, the tiles outside the walled zones that are
+   8-adjacent to a slit; the seal can then wall them. Keeper-gate approaches are exempt (the gate is the
+   guarded crossing).
+
+Two more changes the templates needed, both also helping the base generator:
+
+- `placeCastle` searches with a cascade of widening windows (border distance 5→3→1 from the seed, distance up
+  to 60): template zones can be thin strips (a spine cell on a 36-map is a ribbon with no tile 3 tiles from
+  its border), and 36-sized zones with water had no deep interior at all. `canPlace` still guarantees the
+  footprint.
+- `rings` on 36-sized maps builds one inner vault instead of a ring, and `spine` keeps one extra zone, so
+  scenario objects (victory town, crypt) always have non-start land.
+
+Full-sweep comparison (100 seeds × 15 size/player combinations, same rotation): baseline HEAD 71 failures
+(108/144 accounts for 70, almost all teams maps) versus 7 failures with the templates — 0 on 36/72 maps, all
+7 remaining are teams + high water on 108/144 ("thin wall" at the map edge, or the repair unable to reconnect
+the human's castle on wasteland/high). That residual class predates the templates and needs its own pass over
+the water–wall interaction; retries went from 93 to 181 of 1500 (12%, above the old 5% bar — the cost of five
+layouts, dominated by unlucky template/option combinations that the 8-attempt retry escapes).
+
+### Templates

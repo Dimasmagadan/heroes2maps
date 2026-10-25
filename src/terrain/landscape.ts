@@ -73,8 +73,12 @@ export function generateLandscape(layout: Layout, opts: GeneratorOptions, rng: R
       if (!walled.has(zoneId)) return { pass: base, diagonalOk: base };
       // The corridor may cross the border ring where the interior splits (narrow zone necks); the crossing tile
       // stays open as a slit and the seal walls its outside neighbors. Diagonal ring crossings are not allowed:
-      // their side tiles get walled and would cut the corridor.
-      return { pass: base, diagonalOk: (t: number) => !border.has(t) };
+      // their side tiles get walled and would cut the corridor — and a diagonal's side tile must never spill
+      // outside the walled zones beside the ring: it would sit on the outside of a slit and break the seal.
+      return {
+        pass: base,
+        diagonalOk: (t: number) => !border.has(t) && walled.has(zoneOf[t] as number),
+      };
     };
     // The walled side's leg ends just inside the border ring, orthogonally to the gate: the wall then meets the
     // road at the gate without closing around it, and a diagonal approach would be blocked by fheroes2's
@@ -126,6 +130,32 @@ export function generateLandscape(layout: Layout, opts: GeneratorOptions, rng: R
     corridors.push(line);
     if (opts.preset !== 'islands') for (const t of line) dilate(grid, t, 1, (n) => (protectedLand[n] = 1));
   }
+  // Slits of the walled team: walled-border tiles crossed by a corridor. Every tile outside the walled zones
+  // 8-adjacent to a slit must be sealable by the wall (generate.ts seals them before roads take the space), so
+  // no corridor tile may sit there. Drop such tiles from their lines: corridors are only used as tile sets for
+  // water protection and road reservations, roads are routed independently, and the tiles right next to the
+  // walled zones are protected from water by the zones themselves. The keeper gate's own approach is exempt —
+  // the gate is the guarded crossing and stays open.
+  if (walled.size > 0 && opts.preset !== 'islands') {
+    const keeperGates = new Set<number>();
+    for (const c of layout.connections) if (c.keeper !== undefined) keeperGates.add(c.keeper === c.a ? c.gateA : c.gateB);
+    const slits = new Set<number>();
+    for (const line of corridors) for (const t of line) if (border.has(t) && !keeperGates.has(t)) slits.add(t);
+    for (const line of corridors) {
+      const keep = line.filter((t) => {
+        if (walled.has(zoneOf[t] as number)) return true;
+        for (const d of NEIGHBOR_DIRECTIONS) {
+          const n = grid.neighbor(t, d);
+          if (n >= 0 && slits.has(n)) return false;
+        }
+        return true;
+      });
+      if (keep.length !== line.length) {
+        line.length = 0;
+        line.push(...keep);
+      }
+    }
+  }
   for (const z of zones) {
     const r = z.kind === 'start' ? 7 : z.kind === 'center' ? 4 : 3;
     dilate(grid, z.seed, r, (n) => {
@@ -151,6 +181,16 @@ export function generateLandscape(layout: Layout, opts: GeneratorOptions, rng: R
         s += 0.45 * Math.max(0, 1 - edge);
       }
       if (borderDist) s = 0.35 * s + Math.max(0, 1 - (borderDist[t] as number) / 4);
+      // split: pile extra water score along the barrier axis so a strait crosses the map; the bridge zones and
+      // the start zones stay dry (their corridors would resist anyway, but their shores should look natural).
+      if (layout.template === 'split' && layout.bridges.size > 0) {
+        const zone = zones[zoneOf[t] as number] as Zone;
+        if (zone.kind !== 'start' && !layout.bridges.has(zone.id)) {
+          const d = layout.splitVertical ? Math.abs(x - (W - 1) / 2) : Math.abs(y - (W - 1) / 2);
+          const band = W * 0.1;
+          if (d < band) s += 0.55 * (1 - d / band);
+        }
+      }
       score[t] = s;
     }
     const candidates: number[] = [];

@@ -26,6 +26,7 @@ node src/cli.ts generate --seed 123 --size 72 --players 4 --water medium --diffi
 | `--water <level>` | none, low, medium, high | low |
 | `--difficulty <d>` | easy, normal, hard, expert (scales guard strength) | normal |
 | `--preset <p>` | continent, lakes, islands (zones on separate islands, boats provided), wasteland | continent |
+| `--template <t>` | random, ring, hub, split, spine, rings — the macro layout of the map (see "Templates") | random |
 | `--race <r>` | random, knight, barbarian, sorceress, warlock, wizard, necromancer (the human player's faction; computer players stay random) | random |
 | `--victory <v>` | normal, capture-town (a neutral town far away), artifact (a guarded major artifact) | normal |
 | `--expansion` | include The Price of Loyalty objects and artifacts | off |
@@ -59,9 +60,10 @@ node src/cli.ts install  <map.fh2m>
 
 ## How it works
 
-1. **Layout** (`src/layout/zones.ts`): start zones sit on a ring around the center. Bigger maps also get a
-   center zone, and neutral zones fill the rest. Tiles go to zones by noisy weighted Voronoi. Zones are connected
-   by a spanning tree plus extra loops; each connection has a gate on the shared border.
+1. **Layout** (`src/layout/zones.ts`): a template picks the macro shape (see "Templates") — where the start
+   zones, the center and the neutral zones sit, and which zones are connected. Tiles go to zones by noisy
+   weighted Voronoi. Zones are connected by a spanning tree plus extra loops; each connection has a gate on the
+   shared border, and the template reweights the edges to push the graph into its shape.
 2. **Landscape** (`src/terrain/landscape.ts`): noise-based seas and lakes, but never on the corridors between
    zones or around starts. Each zone has a biome with patches of a second ground, beaches along coasts, and a
    smoothing pass.
@@ -78,6 +80,24 @@ node src/cli.ts install  <map.fh2m>
 
 The object table (`src/data/`) is generated from the fheroes2 C++ source by `scripts/extract-objects.ts`. The
 script compiles fheroes2's own `map_object_info.cpp` with a small dump program, so no table is copied by hand.
+
+### Templates
+
+Every map has one of five macro layouts. By default (`--template random`) the seed picks one, so consecutive
+seeds produce structurally different maps, not just reshuffled versions of the same shape. The template sets
+the seed placement and the connection graph; water presets, content budgets and everything downstream stay the
+same and work on any of them.
+
+| Template | Layout |
+|---|---|
+| `ring` | The classic: start zones on a ring around the map, a center zone on bigger maps, neutral zones everywhere else. |
+| `hub` | Everything routes through a rich center zone: start zones form a tight ring around it, neutral zones are pushed to the outskirts, and the connection graph is a star. The center carries extra content and a neutral town more often — breaking out of your own zone and reaching the middle is the whole game. |
+| `split` | Two halves (even players west/north, odd players east/south) divided by a water strait (with any water level above `none`). Only one or two neutral "bridge" zones straddle the strait, keep their land dry, and carry the roads between the halves — guarded chokepoints by construction. |
+| `spine` | A chain of zones across the map (either diagonal), with the starts spread along it, both ends included. A linear progression: every step past the next gate is deeper into neutral land. |
+| `rings` | Starts on an outer ring around a rich inner ring of neutral zones (1.8x content budget) that connect mostly within itself and open to the outside through few guarded gates. The middle of the map is the prize. |
+
+Teams (`--teams`), the necromancer tuning, victory conditions and the tale work with every template; `split`
+even spreads the walled-in team across both halves, one keeper gate each.
 
 ### Teams
 

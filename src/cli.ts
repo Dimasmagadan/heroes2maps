@@ -15,7 +15,7 @@ import { decodeMap, encodeMap } from './fh2m/codec.ts';
 import type { MapFormat } from './fh2m/types.ts';
 import { compareWithGame, findChecker, runGameCheck } from './fh2check.ts';
 import { generate } from './generate.ts';
-import { DIFFICULTIES, MAP_SIZES, PLAYER_LIMITS, PRESETS, RACES, VICTORY_CONDITIONS, WATER_LEVELS, type GeneratorOptions } from './options.ts';
+import { DIFFICULTIES, MAP_SIZES, PLAYER_LIMITS, PRESETS, RACES, TEMPLATES, VICTORY_CONDITIONS, WATER_LEVELS, type GeneratorOptions } from './options.ts';
 import { renderAscii, renderPng } from './preview/render.ts';
 import { formatStats, mapStats } from './summary.ts';
 import { validateMap } from './validate.ts';
@@ -28,6 +28,7 @@ const USAGE = `Usage:
       --water <level>       ${WATER_LEVELS.join(', ')} (default low)
       --difficulty <d>      ${DIFFICULTIES.join(', ')} (default normal)
       --preset <p>          ${PRESETS.join(', ')} (default continent)
+      --template <t>        ${TEMPLATES.join(', ')}; random picks one per seed (see "Templates" in the README)
       --race <r>            human player's faction: ${RACES.join(', ')} (default random); necromancer also tunes the map
       --victory <v>         ${VICTORY_CONDITIONS.join(', ')} (default normal)
       --expansion           include The Price of Loyalty objects and artifacts
@@ -112,6 +113,7 @@ function main(argv: string[]): number {
       water: { type: 'string' },
       difficulty: { type: 'string' },
       preset: { type: 'string' },
+      template: { type: 'string' },
       victory: { type: 'string' },
       race: { type: 'string' },
       expansion: { type: 'boolean' },
@@ -144,6 +146,7 @@ function main(argv: string[]): number {
       if (values.water) partial.water = values.water as GeneratorOptions['water'];
       if (values.difficulty) partial.difficulty = values.difficulty as GeneratorOptions['difficulty'];
       if (values.preset) partial.preset = values.preset as GeneratorOptions['preset'];
+      if (values.template) partial.template = values.template as GeneratorOptions['template'];
       if (values.race) partial.race = values.race as GeneratorOptions['race'];
       if (values.victory) partial.victory = values.victory as GeneratorOptions['victory'];
       if (values.expansion) partial.expansion = true;

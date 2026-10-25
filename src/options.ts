@@ -20,6 +20,13 @@ export type Difficulty = (typeof DIFFICULTIES)[number];
 export const PRESETS = ['continent', 'lakes', 'islands', 'wasteland'] as const;
 export type Preset = (typeof PRESETS)[number];
 
+// Macro layout of the map (see "Templates" in the README). 'random' picks one per seed.
+export const TEMPLATES = ['random', 'ring', 'hub', 'split', 'spine', 'rings'] as const;
+export type MapTemplate = (typeof TEMPLATES)[number];
+// The concrete layouts a seed can resolve to.
+export const CONCRETE_TEMPLATES = ['ring', 'hub', 'split', 'spine', 'rings'] as const;
+export type ConcreteTemplate = (typeof CONCRETE_TEMPLATES)[number];
+
 export const VICTORY_CONDITIONS = ['normal', 'capture-town', 'artifact'] as const;
 export type VictoryCondition = (typeof VICTORY_CONDITIONS)[number];
 
@@ -34,6 +41,8 @@ export interface GeneratorOptions {
   water: WaterLevel;
   difficulty: Difficulty;
   preset: Preset;
+  // Macro layout; 'random' resolves to a concrete template per seed (see Layout.template).
+  template: MapTemplate;
   victory: VictoryCondition;
   race: Race;
   // Include The Price of Loyalty objects and artifacts.
@@ -56,6 +65,7 @@ export const DEFAULT_OPTIONS: Omit<GeneratorOptions, 'seed'> = {
   water: 'low',
   difficulty: 'normal',
   preset: 'continent',
+  template: 'random',
   victory: 'normal',
   race: 'random',
   expansion: false,
@@ -94,6 +104,7 @@ export function validateOptions(o: GeneratorOptions): void {
   if (!WATER_LEVELS.includes(o.water)) throw new Error(`Invalid water level ${o.water}: expected one of ${WATER_LEVELS.join(', ')}`);
   if (!DIFFICULTIES.includes(o.difficulty)) throw new Error(`Invalid difficulty ${o.difficulty}: expected one of ${DIFFICULTIES.join(', ')}`);
   if (!PRESETS.includes(o.preset)) throw new Error(`Invalid preset ${o.preset}: expected one of ${PRESETS.join(', ')}`);
+  if (!TEMPLATES.includes(o.template)) throw new Error(`Invalid template ${o.template}: expected one of ${TEMPLATES.join(', ')}`);
   if (!VICTORY_CONDITIONS.includes(o.victory)) throw new Error(`Invalid victory condition ${o.victory}: expected one of ${VICTORY_CONDITIONS.join(', ')}`);
   if (!RACES.includes(o.race)) throw new Error(`Invalid race ${o.race}: expected one of ${RACES.join(', ')}`);
   if (o.name !== undefined && !o.tale && !/^[\x20-\x7e]*$/.test(o.name)) throw new Error('Map name must be printable ASCII');

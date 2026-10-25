@@ -44,6 +44,8 @@ function jobs(seeds: number): Job[] {
             players,
             water: WATER_LEVELS[k % WATER_LEVELS.length] as GeneratorOptions['water'],
             preset,
+            // 'random' resolves per seed in generateLayout, so the sweep covers every template.
+            template: 'random',
             difficulty: DIFFICULTIES[(k >> 2) % DIFFICULTIES.length] as GeneratorOptions['difficulty'],
             // Teams maps carry their own victory condition (defeat the other side).
             victory: teams ? 'normal' : (VICTORY_CONDITIONS[seed % VICTORY_CONDITIONS.length] as GeneratorOptions['victory']),
