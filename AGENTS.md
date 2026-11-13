@@ -13,7 +13,7 @@
 - Run `npm run typecheck` and `npm test` after code changes. Type stripping alone does not check types.
 - Generate a sample: `node src/cli.ts generate --seed 123 --size 72 --players 4 --out out/sample.fh2m --summary`.
 - For broader generation checks: `node scripts/sweep.ts --seeds 100`. `SWEEP_SEEDS=n npm test` expands the test sweep.
-- For engine checks, set `FH2CHECK` to a checker built against a debug build of fheroes2 1.1.17, then run `npm test` and `node scripts/sweep.ts --seeds 1 --check`. Without the variable, engine tests are skipped; report that limitation.
+- For engine checks, use the auto-detected `out/tools/fheroes2/fh2check` or set `FH2CHECK` to a checker built against a debug build of fheroes2 1.1.17, then run `npm test` and `node scripts/sweep.ts --seeds 1 --check`. Without an available checker, engine tests are skipped; report that limitation.
 - `scripts/build-fh2check.sh <fheroes2-checkout>` builds the checker after the engine has been compiled with `FHEROES2_WITH_DEBUG=1 make -C src/dist -j8`.
 - `--install` and `scripts/smoke.ts` write to the game's maps directory outside the repository. Prefer generating to `out/` unless installation is part of the task.
 

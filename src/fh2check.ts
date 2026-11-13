@@ -8,6 +8,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { encodeMap } from './fh2m/codec.ts';
 import type { MapFormat } from './fh2m/types.ts';
 import { MovementModel } from './validate.ts';
@@ -28,9 +29,9 @@ export interface GameCheck {
   heroReach?: { color: number; start: number; tiles: number[] }[];
 }
 
-// Path of the fh2check binary from $FH2CHECK, or null when it is not available.
+// Explicit override, or the conventional ignored local engine checkout.
 export function findChecker(): string | null {
-  const path = process.env['FH2CHECK'];
+  const path = process.env['FH2CHECK'] ?? fileURLToPath(new URL('../out/tools/fheroes2/fh2check', import.meta.url));
   return path && existsSync(path) ? path : null;
 }
 

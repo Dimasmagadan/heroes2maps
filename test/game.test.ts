@@ -1,4 +1,4 @@
-// Checks against the real game code. Skipped unless $FH2CHECK points to the fh2check tool
+// Checks against the real game code. Uses $FH2CHECK or the local out/tools/fheroes2/fh2check tool
 // (built with scripts/build-fh2check.sh against a debug build of fheroes2).
 
 import assert from 'node:assert/strict';
@@ -11,7 +11,7 @@ import { generate } from '../src/generate.ts';
 const checker = findChecker();
 const dir = new URL('../fixtures/', import.meta.url);
 
-describe('fheroes2 game check', { skip: checker === null ? 'FH2CHECK is not set' : false }, () => {
+describe('fheroes2 game check', { skip: checker === null ? 'fh2check is not available' : false }, () => {
   for (const file of readdirSync(dir).filter((f) => f.endsWith('.fh2m'))) {
     it(`our movement model is never more permissive than the game on ${file}`, () => {
       const map = decodeMap(new Uint8Array(readFileSync(new URL(file, dir))));

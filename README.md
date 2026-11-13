@@ -180,6 +180,18 @@ guarded Spade of Necromancy lies in a far neutral zone.
 
 ## Checking against the game
 
+A checker at `out/tools/fheroes2/fh2check` is detected automatically, including by `npm test`.
+`FH2CHECK` overrides this path. The `out/` directory is ignored by Git.
+To set up this local checkout from the project root:
+
+```sh
+git clone --depth 1 --branch 1.1.17 https://github.com/ihhub/fheroes2.git out/tools/fheroes2
+FHEROES2_WITH_DEBUG=1 make -C out/tools/fheroes2/src/dist -j8
+sh scripts/build-fh2check.sh out/tools/fheroes2
+npm test
+node scripts/sweep.ts --seeds 1 --check
+```
+
 `tools/fh2check` is a headless checker linked against a debug build of fheroes2. It loads a map exactly as the
 game does when you start a new game, runs the game's internal asserts, and reports the passability the game
 computed. Our movement model must never allow a move the game forbids; the tests compare the two.
