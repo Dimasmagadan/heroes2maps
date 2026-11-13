@@ -36,7 +36,12 @@ function jobs(seeds: number): Job[] {
       for (let seed = 1; seed <= seeds; ++seed) {
         const k = seed + players;
         const preset = PRESETS[(k >> 1) % PRESETS.length] as GeneratorOptions['preset'];
-        const teams = players >= 4 && preset !== 'islands' && seed % 3 === 0;
+        // The dead lands are a teams scenario for 4+ players; resolveOptions fills in the implications
+        // (the necromancer race, teams, the twist, the expansion) and forces the victory condition.
+        const deadlands = players >= 4 && preset !== 'islands' && seed % 9 === 4;
+        // The long night: a 3+ player scenario with its own victory and calendar (no teams, no twist, no victory option).
+        const dawn = !deadlands && players >= 3 && size >= 72 && seed % 9 === 7;
+        const teams = deadlands || (players >= 4 && preset !== 'islands' && seed % 3 === 0);
         list.push({
           options: {
             seed: seed * 1000 + size + players,
@@ -48,12 +53,14 @@ function jobs(seeds: number): Job[] {
             template: 'random',
             difficulty: DIFFICULTIES[(k >> 2) % DIFFICULTIES.length] as GeneratorOptions['difficulty'],
             // Teams maps carry their own victory condition (defeat the other side).
-            victory: teams ? 'normal' : (VICTORY_CONDITIONS[seed % VICTORY_CONDITIONS.length] as GeneratorOptions['victory']),
+            victory: teams || dawn ? 'normal' : (VICTORY_CONDITIONS[seed % VICTORY_CONDITIONS.length] as GeneratorOptions['victory']),
             race: RACES[(seed + size) % RACES.length] as GeneratorOptions['race'],
-            expansion: seed % 5 === 0,
+            expansion: deadlands || seed % 5 === 0,
             teams,
-            twist: seed % 4 === 0,
+            twist: deadlands || (!dawn && seed % 4 === 0),
             tale: false,
+            deadlands,
+            dawn,
           },
         });
       }

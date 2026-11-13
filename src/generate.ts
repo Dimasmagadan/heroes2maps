@@ -56,6 +56,39 @@ import {
   ru,
 } from './content/tale.ts';
 import { PEASANT_RUMORS, RIDDLES, RUMORS, SIGN_MESSAGES, TWIST_RUMORS, mapName } from './content/names.ts';
+import {
+  CORLAGON_CASTLE,
+  CORLAGON_HERO,
+  DEADLANDS_DESCRIPTION,
+  DEADLANDS_NAME,
+  DEADLANDS_PRISONER,
+  DEADLANDS_RUMORS,
+  DEADLANDS_SIGNS,
+  DEADLANDS_TOWNS,
+  HOME_SIGN,
+  LIVING_CASTLES,
+  LIVING_HEROES,
+  PALE_TIDE_DEADLANDS,
+  TAXES_DEADLANDS,
+  TREASURY_DEADLANDS,
+} from './content/deadlands.ts';
+import {
+  BONE_DRAGON,
+  DAWNSPIRE,
+  DAWNSPIRE_GARRISON,
+  DAWN_DEADLINE_DAY,
+  DAWN_DESCRIPTION,
+  DAWN_EVENTS,
+  DAWN_NAME,
+  DAWN_RUMORS,
+  DAWN_SIGNS,
+  GRAVEWARDEN,
+  HOME_SIGN as DAWN_HOME_SIGN,
+  MALACHAR_CASTLE,
+  MALACHAR_HERO,
+  OATHBREAKER,
+  TOMB_MESSAGE,
+} from './content/dawn.ts';
 import { repairReachability } from './content/repair.ts';
 import { checkZoneSeal, dryWalledShores, reserveGateAprons, sealInfo } from './content/seal.ts';
 import { routeRoads } from './content/roads.ts';
@@ -169,6 +202,8 @@ function generateAttempt(options: GeneratorOptions, attempt: number, debug: Debu
 
   // --- Neutral zones ---
   const neutral = layout.zones.filter((z) => z.kind !== 'start').sort((a, c) => a.distance - c.distance || a.id - c.id);
+  // Dawnspire goes in first, while its zone still has room: the farthest city from the human, with a mighty garrison.
+  const dawnspire = options.dawn ? placeDawnspire(ctx, layout, castles, neutral) : null;
   const otherRares = RARE_RESOURCES.filter((r) => !rares.includes(r));
   let rareCursor = 0;
   const townRng = root.fork('towns');
@@ -197,8 +232,9 @@ function generateAttempt(options: GeneratorOptions, attempt: number, debug: Debu
     fillZone(ctx, zone, budget, anchor);
   }
 
-  // Teams: a field of peasants for the human to find (necromancy fodder against the huge guard of team 3).
-  if (options.teams) placePeasantField(ctx, layout, castles, neutral);
+  // Fields of peasants for the human to find (necromancy fodder against the huge guard of team 3). The dead
+  // lands need several: the skeleton host that breaks the living kingdom grows from three harvests.
+  if (options.teams || options.dawn) placePeasantFields(ctx, layout, castles, neutral, options.deadlands ? 3 : options.dawn ? 2 : 1);
 
   // The capture-town victory needs a neutral town: put one into the farthest zone that has room.
   if (options.victory === 'capture-town' && !ctx.castles.some((c) => c.player < 0)) {
@@ -226,6 +262,12 @@ function generateAttempt(options: GeneratorOptions, attempt: number, debug: Debu
     placeJails(ctx, neutral);
     placePowerPlace(ctx, neutral);
     placeHintSign(ctx, neutral, startZones);
+  }
+  if (options.deadlands) placePrison(ctx, layout, castles, neutral, DEADLANDS_PRISONER, 1);
+  if (options.dawn) {
+    placePrison(ctx, layout, castles, neutral, GRAVEWARDEN, 1);
+    placePrison(ctx, layout, castles, neutral, OATHBREAKER, 2);
+    placeTomb(ctx, layout, castles, neutral, dawnspire);
   }
 
   // --- Roads, gates, boats ---
@@ -268,7 +310,7 @@ function generateAttempt(options: GeneratorOptions, attempt: number, debug: Debu
   const thin = thinWallSpots(ctx);
   if (thin.length > 0) throw new GenerationError(`The walled team's wall is thin and unguarded at ${thin.slice(0, 3).map((t) => `${ctx.grid.x(t)},${ctx.grid.y(t)}`).join('; ')}`);
 
-  finishMetadata(ctx, options, landscape, victoryArtifact, root.fork('texts'));
+  finishMetadata(ctx, options, landscape, victoryArtifact, dawnspire, root.fork('texts'));
   return {
     map: b.map,
     options,
@@ -318,11 +360,8 @@ function placeBoatsWhereNeeded(ctx: ContentContext, layout: Layout, castles: rea
   }
 }
 
-// A crowd of weak, large peasant stacks in a hidden corner of a neutral zone two or more zones from the human's start.
-// Beating them raises plenty of skeletons for a necromancer.
-function placePeasantField(ctx: ContentContext, layout: Layout, castles: readonly CastleSite[], neutral: readonly Zone[]): void {
-  const home = castles.find((c) => c.player === 0)?.zone;
-  if (home === undefined) return;
+// Graph distance in zones from the human's home zone, over the layout connections.
+function stepsFromHome(layout: Layout, home: number): Map<number, number> {
   const steps = new Map<number, number>([[home, 0]]);
   for (let queue = [home]; queue.length > 0; ) {
     const cur = queue.shift() as number;
@@ -334,12 +373,24 @@ function placePeasantField(ctx: ContentContext, layout: Layout, castles: readonl
       }
     }
   }
+  return steps;
+}
+
+// Crowds of weak, large peasant stacks in hidden corners of neutral zones two or more zones from the human's
+// start. Beating them raises plenty of skeletons for a necromancer. The dead lands place several fields: the
+// skeleton host that breaks the living kingdom grows from more than one harvest.
+function placePeasantFields(ctx: ContentContext, layout: Layout, castles: readonly CastleSite[], neutral: readonly Zone[], count: number): void {
+  const home = castles.find((c) => c.player === 0)?.zone;
+  if (home === undefined) return;
+  const steps = stepsFromHome(layout, home);
   const g = ctx.grid;
   const homeSeed = (layout.zones[home] as Zone).seed;
   const zones = neutral
     .filter((z) => (steps.get(z.id) ?? 0) >= 2 && z.tiles.some((t) => ctx.usable(t)))
     .sort((a, b) => (steps.get(a.id) as number) - (steps.get(b.id) as number) || g.euclid(a.seed, homeSeed) - g.euclid(b.seed, homeSeed) || a.id - b.id);
+  let fields = 0;
   for (const zone of zones) {
+    if (fields >= count) break;
     // The hidden corner: the usable tile deepest inside the zone and farthest from its seed.
     const spots = zone.tiles.filter((t) => ctx.usable(t) && (ctx.borderDist[t] as number) >= 5);
     if (spots.length === 0) continue;
@@ -353,9 +404,96 @@ function placePeasantField(ctx: ContentContext, layout: Layout, castles: readonl
       ctx.record({ uid: p.uid, zone: zone.id, kind: 'misc', value: 0, tile: p.tile });
       ++placedCount;
     }
-    if (placedCount >= 6) return;
+    if (placedCount >= 6) ++fields;
   }
-  throw new GenerationError('No room for the field of peasants');
+  if (fields === 0) throw new GenerationError('No room for the fields of peasants');
+}
+
+// A prisoner behind a guard in a neutral zone at least `minSteps` zone-steps from the human's start (nearest such zone
+// first). The dead lands and the long night use it for the guaranteed source of the Necromancy skill, which no witch's
+// hut teaches in fheroes2; the long night adds the defector.
+type Prisoner = { name: string; race?: 'necromancer' | 'knight'; skills: readonly (readonly [number, number])[] };
+
+function placePrison(ctx: ContentContext, layout: Layout, castles: readonly CastleSite[], neutral: readonly Zone[], prisoner: Prisoner, minSteps: number): void {
+  const home = castles.find((c) => c.player === 0)?.zone;
+  if (home === undefined) throw new GenerationError('No room for the castle of the scenario');
+  const steps = stepsFromHome(layout, home);
+  const index = firstIndexOfType(ObjectGroup.ADVENTURE_MISCELLANEOUS, objectTypes.OBJ_JAIL);
+  const zones = [...neutral]
+    .filter((z) => (steps.get(z.id) ?? 99) >= minSteps && z.distance >= 0.1 && z.tiles.some((t) => ctx.usable(t)))
+    .sort((a, b) => (steps.get(a.id) as number) - (steps.get(b.id) as number) || a.id - b.id);
+  for (const zone of zones) {
+    const placed = ctx.placeInZone(zone, ObjectGroup.ADVENTURE_MISCELLANEOUS, index, { anchor: zone.seed, min: 3, max: 30 });
+    if (!placed) continue;
+    const meta = ctx.b.map.heroMetadata.get(placed.uid);
+    if (meta) {
+      meta.customName = prisoner.name;
+      meta.race = 1 << RACE_NAMES.indexOf(prisoner.race ?? 'necromancer');
+      meta.secondarySkill = new Array(SKILL_COUNT).fill(0).map((_, i) => prisoner.skills[i]?.[0] ?? 0);
+      meta.secondarySkillLevel = new Array(SKILL_COUNT).fill(0).map((_, i) => prisoner.skills[i]?.[1] ?? 0);
+    }
+    ctx.required.add(placed.uid);
+    ctx.record({ uid: placed.uid, zone: zone.id, kind: 'misc', value: 5000, tile: placed.tile });
+    ctx.guard(placed, zone, 5000, 40);
+    return;
+  }
+  throw new GenerationError(`No room for the prison of ${prisoner.name}`);
+}
+
+// The Long Night: Dawnspire, the neutral city the human must capture. It goes into the farthest zone from the human's
+// start that has room, with a strong garrison instead of the default random defenders.
+function placeDawnspire(ctx: ContentContext, layout: Layout, castles: readonly CastleSite[], neutral: readonly Zone[]): CastleSite {
+  const home = castles.find((c) => c.player === 0)?.zone;
+  if (home === undefined) throw new GenerationError('No room for the castle of the long night');
+  const steps = stepsFromHome(layout, home);
+  const zones = [...neutral].filter((z) => z.tiles.some((t) => ctx.usable(t))).sort((a, b) => (steps.get(b.id) ?? 0) - (steps.get(a.id) ?? 0) || b.distance - a.distance || a.id - b.id);
+  for (const zone of zones) {
+    const site = placeCastle(ctx, zone, NEUTRAL_COLOR_INDEX, -1, true);
+    if (!site) continue;
+    const meta = ctx.b.map.castleMetadata.get(site.uid);
+    if (meta) {
+      meta.defenderMonsterType = DAWNSPIRE_GARRISON.map(([id]) => id);
+      meta.defenderMonsterCount = DAWNSPIRE_GARRISON.map(([, count]) => count);
+    }
+    ctx.required.add(site.uid);
+    return site;
+  }
+  throw new GenerationError('No room for Dawnspire');
+}
+
+// The Long Night: the Dead King's tomb in the neutral zone farthest from the human's start. An event object (human only,
+// once) that wakes a legion of bone dragons, with experience, gold and a major artifact, behind a strong guard.
+function placeTomb(ctx: ContentContext, layout: Layout, castles: readonly CastleSite[], neutral: readonly Zone[], dawnspire: CastleSite | null): void {
+  const home = castles.find((c) => c.player === 0)?.zone;
+  if (home === undefined) throw new GenerationError('No room for the castle of the long night');
+  const steps = stepsFromHome(layout, home);
+  const index = firstIndexOfType(ObjectGroup.ADVENTURE_MISCELLANEOUS, objectTypes.OBJ_EVENT);
+  const art = ctx.rng.pick(artifacts.filter((a) => a.level === 'major' && (ctx.opts.expansion || !a.expansion)));
+  // The tomb must not share the zone of Dawnspire if another zone will do: the legion is meant to be hunted down.
+  const dawnZone = dawnspire?.zone;
+  const zones = [...neutral]
+    .filter((z) => z.tiles.some((t) => ctx.usable(t)))
+    .sort((a, b) => Number(a.id === dawnZone) - Number(b.id === dawnZone) || (steps.get(b.id) ?? 0) - (steps.get(a.id) ?? 0) || a.id - b.id);
+  for (const zone of zones) {
+    const placed = ctx.placeInZone(zone, ObjectGroup.ADVENTURE_MISCELLANEOUS, index, { anchor: zone.seed, min: 0, max: 40, prefer: 4 });
+    if (!placed) continue;
+    const meta = ctx.b.map.adventureMapEventMetadata.get(placed.uid);
+    if (meta) {
+      meta.message = TOMB_MESSAGE;
+      meta.humanPlayerColors = ctx.b.map.humanPlayerColors;
+      meta.computerPlayerColors = 0;
+      meta.artifact = art.id;
+      meta.experience = 6000;
+      meta.monsterType = BONE_DRAGON;
+      meta.monsterCount = 6;
+      meta.resources = { wood: 0, mercury: 4, ore: 0, sulfur: 4, crystal: 4, gems: 4, gold: 8000 };
+    }
+    ctx.required.add(placed.uid);
+    ctx.record({ uid: placed.uid, zone: zone.id, kind: 'misc', value: 12000, tile: placed.tile });
+    ctx.guard(placed, zone, 12000, 60);
+    return;
+  }
+  throw new GenerationError('No room for the tomb of the long night');
 }
 
 function placeSpadeOfNecromancy(ctx: ContentContext, neutral: readonly Zone[]): void {
@@ -522,7 +660,7 @@ function placeSigns(ctx: ContentContext, castles: readonly CastleSite[]): void {
     const placed = ctx.placeInZone(zone, ObjectGroup.ADVENTURE_MISCELLANEOUS, signIndex, { anchor: c.tile + 2 * g.width, min: 2, max: 5 });
     if (!placed) continue;
     const meta = ctx.b.map.signMetadata.get(placed.uid);
-    if (meta) meta.message = ctx.opts.tale ? ru(c.player === 0 ? MARYA_SIGN : ctx.rng.pick(TALE_SIGNS)) : ctx.rng.pick(SIGN_MESSAGES);
+    if (meta) meta.message = ctx.opts.tale ? ru(c.player === 0 ? MARYA_SIGN : ctx.rng.pick(TALE_SIGNS)) : ctx.opts.deadlands ? (c.player === 0 ? HOME_SIGN : ctx.rng.pick(DEADLANDS_SIGNS)) : ctx.opts.dawn ? (c.player === 0 ? DAWN_HOME_SIGN : ctx.rng.pick(DAWN_SIGNS)) : ctx.rng.pick(SIGN_MESSAGES);
     ctx.record({ uid: placed.uid, zone: zone.id, kind: 'misc', value: 0, tile: placed.tile });
   }
 }
@@ -544,7 +682,7 @@ function placeSphinx(ctx: ContentContext, layout: Layout): void {
   ctx.record({ uid: placed.uid, zone: zone.id, kind: 'misc', value: 8000, tile: placed.tile });
 }
 
-function finishMetadata(ctx: ContentContext, options: GeneratorOptions, landscape: Landscape, victoryArtifact: number, rng: Rng): void {
+function finishMetadata(ctx: ContentContext, options: GeneratorOptions, landscape: Landscape, victoryArtifact: number, dawnspire: CastleSite | null, rng: Rng): void {
   const map = ctx.b.map;
   let available = 0;
   for (let p = 0; p < options.players; ++p) available |= 1 << p;
@@ -590,11 +728,20 @@ function finishMetadata(ctx: ContentContext, options: GeneratorOptions, landscap
     map.isVictoryConditionApplicableForAI = true;
   }
 
+  // The Long Night: capture Dawnspire (the normal victory also counts) before the end of the eighth week.
+  if (options.dawn && dawnspire) {
+    map.victoryConditionType = 1;
+    map.victoryConditionMetadata = [dawnspire.tile, 0];
+    map.allowNormalVictory = true;
+    map.lossConditionType = 3;
+    map.lossConditionMetadata = [DAWN_DEADLINE_DAY];
+  }
+
   // Dominant ground for the name.
   const counts = new Map<Ground, number>();
   for (const g of landscape.ground) if (g !== Ground.WATER) counts.set(g, (counts.get(g) ?? 0) + 1);
   const dominant = [...counts].sort((a, b) => b[1] - a[1] || a[0] - b[0])[0]?.[0] ?? Ground.GRASS;
-  map.name = options.tale ? ru(options.name ?? TALE_NAME).slice(0, 64) : (options.name ?? mapName(rng, dominant)).slice(0, 64);
+  map.name = options.tale ? ru(options.name ?? TALE_NAME).slice(0, 64) : (options.name ?? (options.deadlands ? DEADLANDS_NAME : options.dawn ? DAWN_NAME : mapName(rng, dominant))).slice(0, 64);
   map.description =
     `Random map ${options.size}x${options.size}, ${options.players} players (1 human), ${options.water} water, ${options.difficulty}, ` +
     `${options.preset} preset, ${ctx.layout.template} layout, mostly ${GROUND_NAMES[dominant]}. Seed ${options.seed}.`;
@@ -602,12 +749,21 @@ function finishMetadata(ctx: ContentContext, options: GeneratorOptions, landscap
     map.description = ru(TALE_DESCRIPTION);
     map.mainLanguage = RUSSIAN_LANGUAGE;
     nameTaleCharacters(ctx);
+  } else if (options.deadlands) {
+    map.description = DEADLANDS_DESCRIPTION;
+    nameDeadlandsCharacters(ctx);
+  } else if (options.dawn) {
+    map.description = DAWN_DESCRIPTION;
+    nameDawnCharacters(ctx, dawnspire);
   }
   map.creatorNotes = `Generated by her2 (https://github.com/ihhub/fheroes2 format v13). Seed ${options.seed}, options ${JSON.stringify(options)}.`;
 
   map.rumors = rng.shuffle([...RUMORS]).slice(0, 3);
   if (options.teams) map.rumors.push(rng.pick(PEASANT_RUMORS));
   if (options.twist) map.rumors.push(rng.pick(TWIST_RUMORS));
+  // All five dead lands rumors: each one is load-bearing (the fields, the prison, the keeper, the crypt, the graveyards).
+  if (options.deadlands) map.rumors = rng.shuffle([...DEADLANDS_RUMORS]);
+  if (options.dawn) map.rumors = rng.shuffle([...DAWN_RUMORS]);
   if (options.tale) map.rumors = TALE_RUMORS.map(ru);
   // A weekly caravan for everyone: a little wood and ore every 7 days from day 7.
   map.dailyEvents = [
@@ -623,7 +779,7 @@ function finishMetadata(ctx: ContentContext, options: GeneratorOptions, landscap
   // The Pale Tide: on day 21 every computer player gets a windfall that turns the second half of the game.
   if (options.twist) {
     map.dailyEvents.push({
-      message: options.tale ? ru(PALE_TIDE_EVENT) : 'A pale tide rolls over the land. The living arm themselves, and treasuries overflow.',
+      message: options.tale ? ru(PALE_TIDE_EVENT) : options.deadlands ? PALE_TIDE_DEADLANDS : 'A pale tide rolls over the land. The living arm themselves, and treasuries overflow.',
       humanPlayerColors: 0,
       computerPlayerColors: map.computerPlayerColors,
       firstOccurrenceDay: 21,
@@ -631,16 +787,82 @@ function finishMetadata(ctx: ContentContext, options: GeneratorOptions, landscap
       resources: { wood: 20, mercury: 10, ore: 20, sulfur: 10, crystal: 10, gems: 10, gold: 25000 },
     });
   }
+  // The Long Night: the calendar. The tide swings every week between the dead (the human) and the living (the computers).
+  if (options.dawn) {
+    for (const e of DAWN_EVENTS) {
+      map.dailyEvents.push({
+        message: e.message,
+        humanPlayerColors: e.side === 'dead' ? map.humanPlayerColors : 0,
+        computerPlayerColors: e.side === 'living' ? map.computerPlayerColors : 0,
+        firstOccurrenceDay: e.day,
+        repeatPeriodInDays: 0,
+        resources: { wood: e.common, mercury: e.rare, ore: e.common, sulfur: e.rare, crystal: e.rare, gems: e.rare, gold: e.gold },
+      });
+    }
+  }
   // Team 3 starts rich: a treasury on day 1, then gold every week.
   if (options.teams) {
     const none = { wood: 0, mercury: 0, ore: 0, sulfur: 0, crystal: 0, gems: 0, gold: 0 };
     map.dailyEvents.push(
-      { message: 'The treasury of the fortress is full.', humanPlayerColors: 0, computerPlayerColors: teamMask(3), firstOccurrenceDay: 1, repeatPeriodInDays: 0, resources: { wood: 15, mercury: 6, ore: 15, sulfur: 6, crystal: 6, gems: 6, gold: 10000 } },
-      { message: 'Taxes arrive from the fortress lands.', humanPlayerColors: 0, computerPlayerColors: teamMask(3), firstOccurrenceDay: 7, repeatPeriodInDays: 7, resources: { ...none, gold: 2500 } },
+      {
+        message: options.deadlands ? TREASURY_DEADLANDS : 'The treasury of the fortress is full.',
+        humanPlayerColors: 0,
+        computerPlayerColors: teamMask(3),
+        firstOccurrenceDay: 1,
+        repeatPeriodInDays: 0,
+        resources: { wood: 15, mercury: 6, ore: 15, sulfur: 6, crystal: 6, gems: 6, gold: 10000 },
+      },
+      {
+        message: options.deadlands ? TAXES_DEADLANDS : 'Taxes arrive from the fortress lands.',
+        humanPlayerColors: 0,
+        computerPlayerColors: teamMask(3),
+        firstOccurrenceDay: 7,
+        repeatPeriodInDays: 7,
+        resources: { ...none, gold: 2500 },
+      },
     );
   }
 }
 
+// Names of the castles and starting heroes: Lord Corlagon against the living kingdoms; neutral towns rot on the
+// blighted march.
+function nameDeadlandsCharacters(ctx: ContentContext): void {
+  const map = ctx.b.map;
+  let neutralTowns = 0;
+  for (const r of ctx.records) {
+    if (r.kind === 'castle') {
+      const meta = map.castleMetadata.get(r.uid);
+      if (!meta) continue;
+      const name = r.player === undefined ? DEADLANDS_TOWNS[neutralTowns++ % DEADLANDS_TOWNS.length] : r.player === 0 ? CORLAGON_CASTLE : LIVING_CASTLES[(r.player - 1) % LIVING_CASTLES.length];
+      if (name) meta.customName = name;
+    } else if (r.kind === 'hero' && r.player !== undefined) {
+      const meta = map.heroMetadata.get(r.uid);
+      const name = r.player === 0 ? CORLAGON_HERO : LIVING_HEROES[(r.player - 1) % LIVING_HEROES.length];
+      if (meta && name) meta.customName = name;
+    }
+  }
+}
+
+
+// Names of the castles and starting heroes: Lord Malachar against the living kingdoms; Dawnspire, and the neutral towns
+// of the blighted march.
+function nameDawnCharacters(ctx: ContentContext, dawnspire: CastleSite | null): void {
+  const map = ctx.b.map;
+  let neutralTowns = 0;
+  for (const r of ctx.records) {
+    if (r.kind === 'castle') {
+      const meta = map.castleMetadata.get(r.uid);
+      if (!meta) continue;
+      const name =
+        r.uid === dawnspire?.uid ? DAWNSPIRE : r.player === undefined ? DEADLANDS_TOWNS[neutralTowns++ % DEADLANDS_TOWNS.length] : r.player === 0 ? MALACHAR_CASTLE : LIVING_CASTLES[(r.player - 1) % LIVING_CASTLES.length];
+      if (name) meta.customName = name;
+    } else if (r.kind === 'hero' && r.player !== undefined) {
+      const meta = map.heroMetadata.get(r.uid);
+      const name = r.player === 0 ? MALACHAR_HERO : LIVING_HEROES[(r.player - 1) % LIVING_HEROES.length];
+      if (meta && name) meta.customName = name;
+    }
+  }
+}
 
 // Names of the castles and starting heroes: Koschei and the heroes of the tales.
 function nameTaleCharacters(ctx: ContentContext): void {

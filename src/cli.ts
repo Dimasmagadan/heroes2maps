@@ -35,6 +35,8 @@ const USAGE = `Usage:
       --teams               two alliances in-game (human vs all computers), rich walled-in computer team behind one huge guard (4+ players)
       --twist               mid-game twist: computers get a windfall on day 21, a guarded crypt holds the human's counter
       --tale                scenario: Koschei the Deathless vs the heroes of Russian tales (Russian texts; implies necromancer, expansion, twist)
+      --dawn                scenario: The Long Night — take Dawnspire in eight weeks before the sun burns the dead (implies necromancer, expansion; loss by time; 3+ players, size 72+)
+      --deadlands           scenario: The Dead Lands — Lord Corlagon vs the living kingdoms; the blight spreads from your start (implies necromancer, teams, twist, expansion; 4+ players, size 72+)
       --name <text>         map name (default: generated)
       --out <file>          output .fh2m (default out/random_<seed>.fh2m)
       --install             also copy the map into the fheroes2 maps directory
@@ -120,6 +122,8 @@ function main(argv: string[]): number {
       teams: { type: 'boolean' },
       twist: { type: 'boolean' },
       tale: { type: 'boolean' },
+      dawn: { type: 'boolean' },
+      deadlands: { type: 'boolean' },
       name: { type: 'string' },
       out: { type: 'string' },
       install: { type: 'boolean' },
@@ -153,6 +157,8 @@ function main(argv: string[]): number {
       if (values.teams) partial.teams = true;
       if (values.twist) partial.twist = true;
       if (values.tale) partial.tale = true;
+      if (values.dawn) partial.dawn = true;
+      if (values.deadlands) partial.deadlands = true;
       if (values.name !== undefined) partial.name = values.name;
 
       const started = Date.now();

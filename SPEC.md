@@ -115,7 +115,8 @@ All steps are implemented. Summary of what exists and what was learned:
   document: two-side alliance victory (type 4), a guaranteed wall seal with `keeper`-tagged walls, zone-aware roads
   and corridors, dry shores around walled zones, and a seal check in the generator, tests and sweep.
 - Follow-up (2026-10-25): `--template` (five macro layouts, see "Templates" at the end of this document) and the
-  teams seal robustness fixes from "Templates and the teams seal (2026-10-25)".
+  teams seal robustness fixes from "Templates and the teams seal (2026-10-25)", then `--deadlands` (see "The Dead
+  Lands (2026-10-25)").
 
 Still manual: playing a generated map in fheroes2 (visual check, AI turns). See step 6 checklist.
 
@@ -406,3 +407,48 @@ the water–wall interaction; retries went from 93 to 181 of 1500 (12%, above th
 layouts, dominated by unlucky template/option combinations that the 8-attempt retry escapes).
 
 ### Templates
+
+## The Dead Lands (2026-10-25)
+
+`--deadlands` ("The Dead Lands", `src/content/deadlands.ts`, tests in `test/deadlands.test.ts`): a scenario map for
+a necromancy playthrough, built on the teams machinery. The human is Lord Corlagon, a necromancer; the computers are
+the living kingdoms; the richest of them sits walled behind its keeper (all of it reused from `--teams`, including
+the seal, the two-alliance victory of type 4 and the three-tier economy). `resolveOptions` implies
+`race: 'necromancer'`, `teams`, `twist`, `expansion`; `validateOptions` requires 4+ players, size 72+, the normal
+victory, and rejects combining it with `--tale`.
+
+What the mode adds on top of `--teams --race necromancer`:
+
+- **Blight gradient** (`assignDeadlandsGrounds` in `src/layout/zones.ts`, first branch of `assignGrounds`): the
+  human starts on wasteland, zones 0–1 BFS steps away over zone adjacency are dead (wasteland, dirt, swamp, lava),
+  step 2 is a dirt band, farther zones and every computer's start zone are grass. The landscape's secondary-ground
+  patches (enlarged for the necromancer race) keep working on any of these grounds.
+- **Three fields of peasants** instead of one (`placePeasantFields`): fodder for the skeleton host; the first
+  fields sit closest to the human's start. Only a total failure to place any field throws.
+- **The prison of Morvath the Bonekeeper** (`placeDeadlandsPrison`): a jail one or two zones from the human's start
+  with a necromancer prisoner (Necromancy 2, Wisdom 1) — the guaranteed Necromancy source, since a witch's hut
+  cannot teach it in fheroes2. Guarded (5000), tagged required so the repair keeps it.
+- **Texts and names** (ASCII English): fixed map name "The Dead Lands" and a story description; Deadwood Keep /
+  Lord Corlagon, named living castles and heroes, rotting neutral town names, five load-bearing rumors (fields,
+  prison, keeper, crypt, graveyards), dead-lands signs, and dead-lands messages for the twist and team-3 events.
+
+`scripts/sweep.ts` rotates `--deadlands` in (4+ players, seed % 9 === 4). The ideas this mode implements and the
+rejected alternatives live in `IDEAS.md`.
+
+## The Long Night (2026-10-29)
+
+`--dawn` ("The Long Night", `src/content/dawn.ts`, tests in `test/dawn.test.ts`): a necromancer scenario built on a
+fixed calendar of reversals. Needs 3+ players, size 72+; implies the necromancer race and the expansion; incompatible
+with `--teams`, `--twist`, `--victory`, `--tale`, `--deadlands`.
+
+- **Victory and loss**: victory type 1 (capture the town) on Dawnspire, normal victory also counts; loss type 3
+  (out of time) with metadata `[56]`. Dawnspire (`placeDawnspire`) is placed before the neutral zones are filled, in the
+  zone farthest from the human's start, with five explicit garrison stacks (`defenderMonsterType/Count`).
+- **Calendar** (`DAWN_EVENTS`): daily events alternating between the human (days 1, 21, 35, 49) and the computers
+  (days 14, 28, 42), each with a story message. The twist option is not used, the calendar replaces the Pale Tide.
+- **The tomb** (`placeTomb`): event object, human only, in the farthest zone other than Dawnspire's if possible:
+  `monsterType` Bone Dragon x6, experience, resources, a major artifact, strong guard. Whether the game hands the
+  monsters to the hero is not verified against fheroes2 (the other rewards are).
+- **Prisons** (`placePrison`, shared with `--deadlands`): a necromancer with Necromancy and a defector knight.
+- The ground gradient of the dead lands, two peasant fields, ASCII English texts; `scripts/sweep.ts` rotates `--dawn`
+  in (3+ players, size 72+, seed % 9 === 7).

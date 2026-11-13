@@ -428,7 +428,43 @@ function assignNecromancerGrounds(zones: Zone[], rng: Rng): void {
   }
 }
 
+// The Dead Lands (--deadlands): the blight spreads from the necromancer's home. Zones one or two steps away from
+// the human's start zone are dead ground (wasteland, dirt, swamp, lava), the living kingdoms keep their grass at
+// the far end of the zone graph, and the band between is dirt. Start zones are the extremes: wasteland for the
+// necromancer, grass for every living rival.
+function assignDeadlandsGrounds(zones: Zone[], rng: Rng): void {
+  const home = zones.find((z) => z.kind === 'start' && z.player === 0);
+  const steps = new Map<number, number>();
+  if (home) {
+    steps.set(home.id, 0);
+    for (let queue = [home.id]; queue.length > 0; ) {
+      const cur = queue.shift() as number;
+      for (const n of (zones[cur] as Zone).neighbors.keys()) {
+        if (!steps.has(n)) {
+          steps.set(n, (steps.get(cur) as number) + 1);
+          queue.push(n);
+        }
+      }
+    }
+  }
+  const NEAR = [Ground.WASTELAND, Ground.WASTELAND, Ground.DIRT, Ground.SWAMP, Ground.LAVA];
+  const MID = [Ground.DIRT, Ground.DIRT, Ground.WASTELAND, Ground.SWAMP];
+  const FAR = [Ground.GRASS, Ground.GRASS, Ground.DIRT];
+  for (const z of zones) {
+    if (z.kind === 'start') {
+      z.ground = z.player === 0 ? Ground.WASTELAND : Ground.GRASS;
+      continue;
+    }
+    const s = steps.get(z.id);
+    z.ground = rng.pick(s === undefined || s <= 1 ? NEAR : s === 2 ? MID : FAR);
+  }
+}
+
 function assignGrounds(zones: Zone[], opts: GeneratorOptions, rng: Rng): void {
+  if (opts.deadlands || opts.dawn) {
+    assignDeadlandsGrounds(zones, rng);
+    return;
+  }
   if (opts.race === 'necromancer' && opts.preset !== 'wasteland') {
     assignNecromancerGrounds(zones, rng);
     return;

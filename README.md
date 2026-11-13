@@ -33,6 +33,8 @@ node src/cli.ts generate --seed 123 --size 72 --players 4 --water medium --diffi
 | `--teams` | two alliances in-game (human vs all computers) and a rich walled-in computer team behind one huge guard; needs 4+ players (see "Teams") | off |
 | `--twist` | mid-game twist: on day 21 every computer gets a windfall (25000 gold, resources); a guarded crypt in the farthest neutral zone gives the human the counter (8000 exp, 12000 gold, rare resources, a major artifact); a rumor hints at it | off |
 | `--tale` | scenario "Koschei the Deathless": Russian texts (cp1251, language 4), Koschei vs the heroes of Russian tales, prisons with friendly heroes, the place of power; implies necromancer, expansion and twist; size 72+ (see "Tale") | off |
+| `--dawn` | scenario "The Long Night": take Dawnspire in eight weeks before the sun burns the dead; the gold tide swings weekly, a sleeping legion waits in a tomb, a paladin lies in chains; implies necromancer and expansion, loss by time; 3+ players, size 72+ (see "Long Night") | off |
+| `--deadlands` | scenario "The Dead Lands": Lord Corlagon, a necromancer, against the living kingdoms; the blight spreads from his start, the richest living realm is walled in behind one keeper; implies necromancer, teams, twist and expansion; 4+ players, size 72+ (see "Dead Lands") | off |
 | `--name <text>` | map name (ASCII) | generated |
 | `--out <file>` | output file | `out/random_<seed>.fh2m` |
 | `--install` | copy the map into the fheroes2 maps directory | |
@@ -131,6 +133,43 @@ texts are Russian, stored as cp1251 with the map language set to Russian (switch
   The counter is the oak on Buyan, a guarded event object in the farthest neutral zone (8000 experience, 12000 gold,
   rare resources, a major artifact). A necromancer cannot build a tavern, so the hint sits on a sign far from the castle.
 - No Sphinx (the riddle answers would have to be typed in cp1251). Neutral towns and castles get names from the tales.
+
+### Dead Lands
+
+`--deadlands` builds "The Dead Lands": Lord Corlagon (the human, a necromancer) has risen against the living
+kingdoms. It builds on the teams machinery — two alliances in-game, victory "defeat the other side" — and adds
+what the necromancy arc needs. Needs 4+ players and size 72+; implies the necromancer race, `--teams`, `--twist`
+and `--expansion`.
+
+- The blight: the ground tells the story. The human starts on wasteland and the zones around it are dead
+  (wasteland, dirt, swamp, lava); the living kingdoms keep their grass at the far end of the zone graph, with a
+  band of dirt between.
+- Three fields of peasants in hidden corners of neutral zones (the teams mode places one): the fodder for the
+  skeleton host that breaks the walled kingdom. A rumor points at the fields.
+- An imprisoned necromancer (Morvath the Bonekeeper, Necromancy 2, Wisdom 1) behind a guard one or two zones from
+  the start: the guaranteed source of the Necromancy skill, which no witch's hut teaches in fheroes2.
+- The living kingdoms get their names: the human holds Deadwood Keep with Lord Corlagon, the computers rule
+  Kingshold, Sunmarch, Rosewood and their kin; neutral towns rot with names like Marrowford and Gravemarch.
+  Signs and rumors carry the story (ASCII English).
+- The twist fits the arc: on day 21 the royal treasuries arm the living (25000 gold and resources to every
+  computer); the guarded crypt far away holds the dead's counter.
+
+### Long Night
+
+`--dawn` builds "The Long Night": Lord Malachar (the human, a necromancer) has eight weeks of night to capture
+Dawnspire before its morning bell burns every dead thing out of the world. The story is a calendar of reversals.
+Needs 3+ players and size 72+; implies the necromancer race and `--expansion`; no `--teams`, `--twist` or `--victory`.
+
+- Victory: capture Dawnspire, a neutral city in the farthest zone with a garrison of crusaders and champions. Loss: the
+  end of day 56 (loss by time, the sun comes up). The deadline turns the game from growing into rushing.
+- The gold tide swings every week: the living (all computers) get windfalls on days 14, 28 and 42 (12000, 22000, 28000
+  gold plus resources), the dead get theirs on days 1, 21, 35 and 49 (up to 30000 on day 49). A rumor tells the schedule.
+- The sleeping legion: a guarded event object, the Dead King's tomb, in a far zone. It gives the human six Bone Dragons,
+  8000 gold, experience, rare resources and a major artifact. It is the army that cracks Dawnspire.
+- Two prisons: Ilsa the Gravewarden (Necromancy 2, Wisdom 1, the guaranteed source of the skill) near the start, and Sir
+  Roderic the Oathbreaker (a knight, Leadership 2, Logistics 1), a paladin of Dawnspire who refused to ring the bell,
+  two or more zones away.
+- Two fields of peasants as fodder for the skeleton host; the blight ground gradient of the dead lands.
 
 ### Necromancer tuning
 
