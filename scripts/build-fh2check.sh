@@ -9,10 +9,14 @@ SRC="$ROOT/src"
 OBJ="$SRC/dist/fheroes2"
 INC=$(find "$SRC/fheroes2" "$SRC/engine" -type d | sed 's/^/-I/' | tr '\n' ' ')
 SDL=$(sdl2-config --cflags 2>/dev/null || echo "-I/opt/homebrew/include/SDL2")
+case "$(uname)" in
+  Darwin) LINK="-lSDL2_mixer -L/opt/homebrew/lib -lSDL2main -lSDL2 -Wl,-framework,Cocoa" ;;
+  *) LINK="-lSDL2_mixer -lSDL2" ;;
+esac
 # shellcheck disable=SC2086
 c++ -std=c++17 -DWITH_DEBUG $INC $SDL -c "$HERE/tools/fh2check/fh2check.cpp" -o "$ROOT/fh2check.o"
 OBJS=$(ls "$OBJ"/*.o | grep -v '/fheroes2\.o$')
 # shellcheck disable=SC2086
 c++ -o "$ROOT/fh2check" "$ROOT/fh2check.o" $OBJS "$SRC/dist/engine/libengine.a" "$SRC/dist/thirdparty/libsmacker/libsmacker.a" \
-  -lSDL2_mixer -L/opt/homebrew/lib -lSDL2main -lSDL2 -Wl,-framework,Cocoa -lz -pthread
+  $LINK -lz -pthread
 echo "Built $ROOT/fh2check"

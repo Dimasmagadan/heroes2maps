@@ -7,6 +7,8 @@ Each map has 1 human and 1–5 computer players. Every player starts with a cast
 mines. Zones are separated by walls of obstacles and linked through guarded gates. Content gets richer and better
 guarded the farther it is from the starts.
 
+![A generated 72x72 four-player map (seed 123)](docs/preview.png)
+
 ## Requirements
 
 - Node.js 26 or newer. TypeScript runs through Node's type stripping, so there is no build step.
@@ -217,4 +219,5 @@ node scripts/extract-objects.ts path/to/fheroes2      # regenerate src/data from
 ## License
 
 GPL-2.0-or-later, the same as fheroes2. The tables and algorithms ported from fheroes2 and the fixture maps are
-GPL, so this project is a derived work. See [LICENSE](LICENSE).
+GPL, so this project is a derived work. The fixtures are community maps made for fheroes2; the authors are
+credited in [fixtures/README.md](fixtures/README.md). See [LICENSE](LICENSE).

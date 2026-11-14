@@ -432,8 +432,7 @@ What the mode adds on top of `--teams --race necromancer`:
   Lord Corlagon, named living castles and heroes, rotting neutral town names, five load-bearing rumors (fields,
   prison, keeper, crypt, graveyards), dead-lands signs, and dead-lands messages for the twist and team-3 events.
 
-`scripts/sweep.ts` rotates `--deadlands` in (4+ players, seed % 9 === 4). The ideas this mode implements and the
-rejected alternatives live in `IDEAS.md`.
+`scripts/sweep.ts` rotates `--deadlands` in (4+ players, seed % 9 === 4).
 
 ## The Long Night (2026-10-29)
 

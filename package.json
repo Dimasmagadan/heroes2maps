@@ -5,6 +5,21 @@
   "type": "module",
   "description": "Random map generator for Heroes of Might and Magic II (fheroes2 .fh2m format)",
   "license": "GPL-2.0-or-later",
+  "author": "Dmitrii Diakonov",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Dimasmagadan/heroes2maps.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Dimasmagadan/heroes2maps/issues"
+  },
+  "homepage": "https://github.com/Dimasmagadan/heroes2maps#readme",
+  "keywords": [
+    "homm2",
+    "heroes-of-might-and-magic-2",
+    "fheroes2",
+    "random-map-generator"
+  ],
   "engines": {
     "node": ">=26"
   },

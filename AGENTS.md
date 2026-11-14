@@ -2,7 +2,7 @@
 
 ## Context
 
-- Read `README.md` for supported commands and features, `SPEC.md` for design decisions and format constraints, and `IDEAS.md` for scenario plans.
+- Read `README.md` for supported commands and features and `SPEC.md` for design decisions and format constraints.
 - This is a single-player Heroes of Might and Magic II random map generator targeting fheroes2 1.1.17, `.fh2m` format version 13.
 - Keep documentation consistent with changes to options, scenarios, generation, or validation.
 
